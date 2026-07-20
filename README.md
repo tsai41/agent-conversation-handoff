@@ -15,9 +15,11 @@
 
 ## 前置需求
 
-- `python3`
 - `fzf`
 - Claude Code CLI（`claude`）或 Codex CLI（`codex`）至少一個
+- macOS（arm64 或 amd64）
+
+不需要 Go、不需要 python3——安裝的是預先編譯好的單一執行檔。
 
 macOS 可用 Homebrew 安裝 `fzf`：
 
@@ -33,7 +35,9 @@ cd ~/go/src/agent-conversation-handoff
 make install COMMAND=ccs
 ```
 
-`COMMAND` 是你要使用的指令名稱，可改成其他名稱。若 `~/bin` 已有同名指令，安裝時會先建立時間戳備份，再安裝指向此 repo 的 symlink。
+`make install` 會依本機 arch 從最新的 GitHub Release 下載對應的 `ach` 二進位到 `~/bin/ccs`。`COMMAND` 是你要使用的指令名稱，可改成其他名稱。若 `~/bin` 已有同名指令，安裝時會先建立時間戳備份。
+
+只有要維護這個 repo（改程式、發新版）才需要安裝 Go 工具鏈；一般安裝完全不需要。
 
 ## 第一次執行
 
@@ -60,24 +64,24 @@ ccs
 
 ## 主選單
 
-單一 provider 帳號只顯示 provider 名稱：
+單一 provider 帳號只顯示 provider 名稱；每個項目前面有數字，按對應數字鍵直接選（不用按 Enter），最多支援 9 個快捷鍵：
 
 ```text
-Claude
-Codex
-接手既有對話
-帳號設定
+1. Claude
+2. Codex
+3. 接手既有對話
+4. 帳號設定
 ```
 
 同一 provider 有多個帳號時，顯示穩定編號；alias 有設定才附加：
 
 ```text
-Claude · 1 · personal@example.com
-Claude · 2 · work@example.com
-Codex · 1
-Codex · 2 · work
-接手既有對話
-帳號設定
+1. Claude · 1 · personal@example.com
+2. Claude · 2 · work@example.com
+3. Codex · 1
+4. Codex · 2 · work
+5. 接手既有對話
+6. 帳號設定
 ```
 
 取消登記後，其他帳號不會重新編號；新帳號也不會重用已用過的編號。
@@ -104,12 +108,11 @@ registry 使用跨程序鎖與原子寫入，避免同時開啟多個 `ccs` 時�
 
 選擇 `接手既有對話` 後：
 
-1. 選擇目前專案有歷史紀錄的來源帳號。
-2. 依時間、UUID 與第一句需求選擇來源對話。
-3. 選擇不同的目標帳號。
-4. 使用 `claude auth status` 或 `codex login status` 驗證目標登入狀態。
-5. 驗證通過後才建立 handoff artifact。
-6. 使用目標帳號開啟新對話並讀取 artifact。
+1. 選擇接力方向（例如「Claude · 1」→「Codex」），只列出目前專案有歷史紀錄、且目標帳號 CLI 已安裝的組合。
+2. 依時間、id（截斷顯示，避免長 UUID 擠掉預覽文字）與第一句需求選擇來源對話。
+3. 使用 `claude auth status` 或 `codex login status` 驗證目標登入狀態。
+4. 驗證通過後才建立 handoff artifact。
+5. 使用目標帳號開啟新對話並讀取 artifact。
 
 若目標未登入，流程會在建立 artifact 前停止並提示先登入。同一帳號不能同時作為來源與目標。
 
