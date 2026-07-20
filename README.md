@@ -8,7 +8,7 @@
 
 - 支援任意數量的 Claude 與 Codex 帳號。
 - 從一個 `ccs` 選單直接啟動任一帳號。
-- 在目前專案內挑選來源對話，顯示時間、UUID 與第一句需求。
+- 在目前專案內挑選來源對話，顯示對話建立時間、截斷 id 與第一句需求。
 - Claude ↔ Claude、Claude ↔ Codex、Codex ↔ Codex 均使用同一套安全交接流程。
 - 交接前使用 provider 官方 CLI 驗證目標帳號登入狀態。
 - alias 僅供選單辨識，不接觸 token、Keychain 或認證內容。
@@ -110,7 +110,7 @@ registry 使用跨程序鎖與原子寫入，避免同時開啟多個 `ccs` 時�
 
 1. 選擇接力方向（例如「Claude · 1」→「Codex」），只列出目前專案有歷史紀錄、且目標帳號 CLI 已安裝的組合。
 2. 依時間、id（截斷顯示，避免長 UUID 擠掉預覽文字）與第一句需求選擇來源對話。
-3. 使用 `claude auth status` 或 `codex login status` 驗證目標登入狀態。
+3. 使用 `claude auth status` 或 `codex login status` 驗證目標登入狀態（每個帳號快取 5 分鐘，避免重複交接時每次都要等網路來回）。
 4. 驗證通過後才建立 handoff artifact。
 5. 使用目標帳號開啟新對話並讀取 artifact。
 
