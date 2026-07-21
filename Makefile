@@ -29,21 +29,14 @@ build-darwin-amd64:
 install:
 	@command -v claude >/dev/null 2>&1 || command -v codex >/dev/null 2>&1 || { echo "找不到 claude 或 codex。請先安裝至少一個 CLI。" >&2; exit 1; }
 	@command -v fzf >/dev/null 2>&1 || { echo "缺少 fzf。macOS 可執行：brew install fzf" >&2; exit 1; }
-	@command -v curl >/dev/null 2>&1 || { echo "缺少 curl。" >&2; exit 1; }
+	@command -v gh >/dev/null 2>&1 || { echo "缺少 gh (GitHub CLI)。repo 為 private，需要 gh 才能抓 release。macOS 可執行：brew install gh，然後 gh auth login" >&2; exit 1; }
 	@mkdir -p "$(BIN_DIR)"
 	@if [ -e "$(DEST)" ] && [ ! -L "$(DEST)" -o "$$(readlink "$(DEST)" 2>/dev/null)" = "" ]; then \
 		backup="$(DEST).bak-$$(date +%Y%m%d-%H%M%S)"; \
 		mv "$(DEST)" "$$backup"; \
 		echo "✓ 已備份舊指令 → $$backup"; \
 	fi
-	@url=$$(curl -fsSL "https://api.github.com/repos/$(REPO)/releases/latest" \
-		| grep -o '"browser_download_url": *"[^"]*$(ASSET)"' \
-		| head -n1 | cut -d '"' -f4); \
-	if [ -z "$$url" ]; then \
-		echo "在最新 release 找不到 $(ASSET)，請先 push 一個 v* tag 觸發 release workflow。" >&2; \
-		exit 1; \
-	fi; \
-	curl -fsSL -o "$(DEST)" "$$url"
+	@gh release download --repo "$(REPO)" --pattern "$(ASSET)" --output "$(DEST)" --clobber
 	@chmod +x "$(DEST)"
 	@echo "✓ 已安裝 $(DEST)（$(ASSET)，來自最新 GitHub Release）"
 	@case ":$$PATH:" in \

@@ -19,15 +19,17 @@
 ## 前置需求
 
 - `fzf`
+- `gh`（GitHub CLI，已 `gh auth login`）——此 repo 為 private，安裝時需要用 gh 認證抓 release
 - Claude Code CLI（`claude`）或 Codex CLI（`codex`）至少一個
 - macOS（arm64 或 amd64）
 
 不需要 Go、不需要 python3——安裝的是預先編譯好的單一執行檔。
 
-macOS 可用 Homebrew 安裝 `fzf`：
+macOS 可用 Homebrew 安裝：
 
 ```bash
-brew install fzf
+brew install fzf gh
+gh auth login
 ```
 
 ## 安裝
