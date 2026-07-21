@@ -80,7 +80,7 @@ func ClaudeCandidates(sourceHome, project string) ([]Candidate, error) {
 		if err != nil {
 			continue
 		}
-		timestamp := file.startTime.Format("2006-01-02 15:04")
+		timestamp := file.startTime.Local().Format("2006-01-02 15:04")
 		candidates = append(candidates, Candidate{file.path, fmt.Sprintf("%s  %s  %s", timestamp, ShortID(sessionID), truncate(preview, 70))})
 	}
 	if len(candidates) == 0 {
