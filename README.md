@@ -34,15 +34,27 @@ gh auth login
 
 ## 安裝
 
+不需要 clone 整個 repo，直接抓 `install.sh` 執行即可：
+
+```bash
+gh api repos/tsai41/agent-conversation-handoff/contents/install.sh -H "Accept: application/vnd.github.raw" | bash
+```
+
+會依本機 arch 從最新的 GitHub Release 下載對應的 `ach` 二進位到 `~/bin/ccs`。若要改指令名稱或安裝路徑：
+
+```bash
+COMMAND=myalias BIN_DIR=~/bin gh api repos/tsai41/agent-conversation-handoff/contents/install.sh -H "Accept: application/vnd.github.raw" | bash
+```
+
+若 `~/bin` 已有同名指令，安裝時會先建立時間戳備份。
+
+只有要維護這個 repo（改程式、發新版）才需要 clone 並安裝 Go 工具鏈：
+
 ```bash
 git clone git@github.com:tsai41/agent-conversation-handoff.git ~/go/src/agent-conversation-handoff
 cd ~/go/src/agent-conversation-handoff
 make install COMMAND=ccs
 ```
-
-`make install` 會依本機 arch 從最新的 GitHub Release 下載對應的 `ach` 二進位到 `~/bin/ccs`。`COMMAND` 是你要使用的指令名稱，可改成其他名稱。若 `~/bin` 已有同名指令，安裝時會先建立時間戳備份。
-
-只有要維護這個 repo（改程式、發新版）才需要安裝 Go 工具鏈；一般安裝完全不需要。
 
 ## 第一次執行
 
