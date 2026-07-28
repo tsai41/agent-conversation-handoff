@@ -128,7 +128,7 @@ func TestInteractiveHandoffPicksDirectionThenSessionAndLaunchesTarget(t *testing
 	if err != nil {
 		t.Fatal(err)
 	}
-	sessionDir := filepath.Join(claudeHome, "projects", strings.ReplaceAll(resolvedProject, "/", "-"))
+	sessionDir := filepath.Join(claudeHome, "projects", strings.NewReplacer("/", "-", "_", "-").Replace(resolvedProject))
 	os.MkdirAll(sessionDir, 0o755)
 	os.MkdirAll(codexHome, 0o755)
 	sessionPath := filepath.Join(sessionDir, "source.jsonl")

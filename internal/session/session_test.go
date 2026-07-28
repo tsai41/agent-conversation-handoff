@@ -27,7 +27,7 @@ func TestClaudeCandidatesScopesToProjectDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	claudeHome := filepath.Join(dir, ".claude")
-	projectID := strings.ReplaceAll(mustAbs(t, project), "/", "-")
+	projectID := strings.NewReplacer("/", "-", "_", "-").Replace(mustAbs(t, project))
 	sessionDir := filepath.Join(claudeHome, "projects", projectID)
 	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -52,6 +52,68 @@ func TestClaudeCandidatesScopesToProjectDirectory(t *testing.T) {
 	}
 	if !strings.Contains(candidates[0].Description, "continue this") {
 		t.Fatalf("expected preview text, got %q", candidates[0].Description)
+	}
+}
+
+func TestClaudeCandidatesUsesClaudeProjectPathEncoding(t *testing.T) {
+	dir := t.TempDir()
+	project := filepath.Join(dir, "project_with_underscore")
+	if err := os.MkdirAll(project, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	claudeHome := filepath.Join(dir, ".claude")
+	projectID := strings.NewReplacer("/", "-", "_", "-").Replace(mustAbs(t, project))
+	sessionDir := filepath.Join(claudeHome, "projects", projectID)
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	line := `{"type":"user","sessionId":"session-id","message":{"content":"continue this"}}` + "\n"
+	if err := os.WriteFile(filepath.Join(sessionDir, "source.jsonl"), []byte(line), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	candidates, err := ClaudeCandidates(claudeHome, project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 1 {
+		t.Fatalf("expected 1 candidate, got %d", len(candidates))
+	}
+}
+
+func TestClaudeCandidatesLimitsToFiveNewest(t *testing.T) {
+	dir := t.TempDir()
+	project := filepath.Join(dir, "project")
+	if err := os.MkdirAll(project, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	claudeHome := filepath.Join(dir, ".claude")
+	projectID := strings.NewReplacer("/", "-", "_", "-").Replace(mustAbs(t, project))
+	sessionDir := filepath.Join(claudeHome, "projects", projectID)
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	for day := 1; day <= 6; day++ {
+		content := fmt.Sprintf(`{"type":"user","sessionId":"session-%d","timestamp":"2026-07-%02dT09:00:00Z","message":{"content":"conversation %d"}}`+"\n", day, day, day)
+		path := filepath.Join(sessionDir, fmt.Sprintf("session-%d.jsonl", day))
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	candidates, err := ClaudeCandidates(claudeHome, project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 5 {
+		t.Fatalf("expected 5 candidates, got %d: %+v", len(candidates), candidates)
+	}
+	if !strings.Contains(candidates[0].Path, "session-6.jsonl") {
+		t.Fatalf("expected newest session first, got %s", candidates[0].Path)
+	}
+	if strings.Contains(candidates[4].Path, "session-1.jsonl") {
+		t.Fatalf("expected oldest session to be excluded, got %s", candidates[4].Path)
 	}
 }
 
@@ -83,6 +145,38 @@ func TestCodexCandidatesFiltersByRecordedCwd(t *testing.T) {
 	}
 	if !strings.Contains(candidates[0].Path, "match.jsonl") {
 		t.Fatalf("expected the matching session, got %s", candidates[0].Path)
+	}
+}
+
+func TestCodexCandidatesLimitsToFiveNewest(t *testing.T) {
+	dir := t.TempDir()
+	codexHome := filepath.Join(dir, ".codex")
+	sessionsDir := filepath.Join(codexHome, "sessions")
+	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	project := filepath.Join(dir, "project")
+	if err := os.MkdirAll(project, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	for day := 1; day <= 6; day++ {
+		path := filepath.Join(sessionsDir, fmt.Sprintf("rollout-2026-07-%02dT09-00-00-session-%d.jsonl", day, day))
+		writeSession(t, path, mustAbs(t, project), fmt.Sprintf("session-%d", day), fmt.Sprintf("conversation %d", day))
+	}
+
+	candidates, err := CodexCandidates(codexHome, project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 5 {
+		t.Fatalf("expected 5 candidates, got %d: %+v", len(candidates), candidates)
+	}
+	if !strings.Contains(candidates[0].Path, "2026-07-06") {
+		t.Fatalf("expected newest session first, got %s", candidates[0].Path)
+	}
+	if strings.Contains(candidates[4].Path, "2026-07-01") {
+		t.Fatalf("expected oldest session to be excluded, got %s", candidates[4].Path)
 	}
 }
 

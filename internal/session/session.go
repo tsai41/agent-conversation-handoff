@@ -21,6 +21,8 @@ type Candidate struct {
 	Description string
 }
 
+const maxCandidates = 5
+
 // ShortID truncates long ids (e.g. UUIDs) to their first 8 and last 4
 // characters so the surrounding preview text stays visible in a picker.
 func ShortID(id string) string {
@@ -56,7 +58,7 @@ func ClaudeCandidates(sourceHome, project string) ([]Candidate, error) {
 	if err != nil {
 		return nil, err
 	}
-	projectID := strings.ReplaceAll(absProject, "/", "-")
+	projectID := strings.NewReplacer("/", "-", "_", "-").Replace(absProject)
 	sessionDir := filepath.Join(sourceHome, "projects", projectID)
 	info, err := os.Stat(sessionDir)
 	if err != nil || !info.IsDir() {
@@ -82,6 +84,9 @@ func ClaudeCandidates(sourceHome, project string) ([]Candidate, error) {
 		}
 		timestamp := file.startTime.Local().Format("2006-01-02 15:04")
 		candidates = append(candidates, Candidate{file.path, fmt.Sprintf("%s  %s  %s", timestamp, ShortID(sessionID), truncate(preview, 70))})
+		if len(candidates) == maxCandidates {
+			break
+		}
 	}
 	if len(candidates) == 0 {
 		return nil, fmt.Errorf("no readable Claude sessions for this project: %s", sessionDir)
@@ -211,8 +216,9 @@ func CodexCandidates(codexHome, project string) ([]Candidate, error) {
 	}
 	sort.Slice(matches, func(i, j int) bool { return matches[i].startTime.After(matches[j].startTime) })
 
-	candidates := make([]Candidate, len(matches))
-	for i, m := range matches {
+	count := min(len(matches), maxCandidates)
+	candidates := make([]Candidate, count)
+	for i, m := range matches[:count] {
 		timestamp := m.startTime.Format("2006-01-02 15:04")
 		candidates[i] = Candidate{m.path, fmt.Sprintf("%s  %s  %s", timestamp, ShortID(m.sessionID), truncate(m.preview, 70))}
 	}
