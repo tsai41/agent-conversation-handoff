@@ -21,7 +21,40 @@ type Candidate struct {
 	Description string
 }
 
+// Match is a session found by id lookup rather than by project scan. It
+// carries the recorded working directory so callers can warn when the
+// conversation belongs to a different project than the one being handed to.
+type Match struct {
+	Candidate
+	SessionID string
+	CWD       string
+	StartTime time.Time
+}
+
 const maxCandidates = 5
+
+// minIDFragment keeps a one- or two-character entry from matching most of
+// the history and burying the user in a picker.
+const minIDFragment = 4
+
+func describe(startTime time.Time, sessionID, preview string) string {
+	return fmt.Sprintf("%s  %s  %s", startTime.Format("2006-01-02 15:04"), ShortID(sessionID), truncate(preview, 70))
+}
+
+// SortNewestFirst orders matches by conversation start time, newest first.
+// Callers that merge matches from several accounts need it to re-sort the
+// combined list.
+func SortNewestFirst(matches []Match) {
+	sort.Slice(matches, func(i, j int) bool { return matches[i].StartTime.After(matches[j].StartTime) })
+}
+
+func normalizeFragment(fragment string) (string, error) {
+	fragment = strings.ToLower(strings.TrimSpace(fragment))
+	if len(fragment) < minIDFragment {
+		return "", fmt.Errorf("conversation id needs at least %d characters", minIDFragment)
+	}
+	return fragment, nil
+}
 
 // ShortID truncates long ids (e.g. UUIDs) to their first 8 and last 4
 // characters so the surrounding preview text stays visible in a picker.
@@ -78,12 +111,11 @@ func ClaudeCandidates(sourceHome, project string) ([]Candidate, error) {
 
 	var candidates []Candidate
 	for _, file := range files {
-		sessionID, preview, err := readClaudeSession(file.path)
+		sessionID, preview, _, err := readClaudeSession(file.path)
 		if err != nil {
 			continue
 		}
-		timestamp := file.startTime.Local().Format("2006-01-02 15:04")
-		candidates = append(candidates, Candidate{file.path, fmt.Sprintf("%s  %s  %s", timestamp, ShortID(sessionID), truncate(preview, 70))})
+		candidates = append(candidates, Candidate{file.path, describe(file.startTime.Local(), sessionID, preview)})
 		if len(candidates) == maxCandidates {
 			break
 		}
@@ -128,16 +160,18 @@ func fallbackModTime(path string) time.Time {
 	return time.Time{}
 }
 
-func readClaudeSession(path string) (sessionID string, preview string, err error) {
+func readClaudeSession(path string) (sessionID string, preview string, cwd string, err error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return "", "", err
+		return "", "", "", err
 	}
 	defer file.Close()
 	sessionID = "unknown UUID"
 	scanner := bufio.NewScanner(file)
 	scanner.Buffer(make([]byte, 0, 64*1024), 16*1024*1024)
+	lines := 0
 	for scanner.Scan() {
+		lines++
 		var entry map[string]any
 		if err := json.Unmarshal(scanner.Bytes(), &entry); err != nil {
 			continue
@@ -147,14 +181,71 @@ func readClaudeSession(path string) (sessionID string, preview string, err error
 		} else if id, ok := entry["session_id"].(string); ok && id != "" {
 			sessionID = id
 		}
+		if recorded, ok := entry["cwd"].(string); ok && recorded != "" && cwd == "" {
+			cwd = recorded
+		}
 		if entry["type"] == "user" && preview == "" {
 			preview = sessionText(entry)
 		}
-		if sessionID != "unknown UUID" && preview != "" {
+		// cwd is optional: a session that never records one must not cost a
+		// full scan of a large file just to find that out.
+		if sessionID != "unknown UUID" && preview != "" && (cwd != "" || lines >= cwdScanLimit) {
 			break
 		}
 	}
-	return sessionID, preview, scanner.Err()
+	return sessionID, preview, cwd, scanner.Err()
+}
+
+const cwdScanLimit = 200
+
+// FindClaudeByID returns every Claude session under sourceHome whose id
+// contains fragment, newest first, regardless of which project it belongs
+// to. Claude names each session file after its id, so the whole history is
+// matched by filename and only the hits are opened.
+func FindClaudeByID(sourceHome, fragment string) ([]Match, error) {
+	fragment, err := normalizeFragment(fragment)
+	if err != nil {
+		return nil, err
+	}
+	matches, err := filepath.Glob(filepath.Join(escapeGlobMeta(sourceHome), "projects", "*", "*.jsonl"))
+	if err != nil {
+		return nil, err
+	}
+
+	var found []Match
+	for _, path := range matches {
+		base := strings.TrimSuffix(filepath.Base(path), ".jsonl")
+		if !strings.Contains(strings.ToLower(base), fragment) {
+			continue
+		}
+		sessionID, preview, cwd, err := readClaudeSession(path)
+		if err != nil {
+			continue
+		}
+		startTime := claudeSessionStartTime(path).Local()
+		found = append(found, Match{
+			Candidate: Candidate{path, describe(startTime, sessionID, preview)},
+			SessionID: sessionID,
+			CWD:       cwd,
+			StartTime: startTime,
+		})
+	}
+	SortNewestFirst(found)
+	return found, nil
+}
+
+// escapeGlobMeta keeps a literal directory path literal: an account home
+// containing "[", "*" or "?" would otherwise be read as pattern syntax and
+// silently match nothing.
+func escapeGlobMeta(path string) string {
+	var escaped strings.Builder
+	for _, r := range path {
+		if strings.ContainsRune(`*?[\`, r) {
+			escaped.WriteByte('\\')
+		}
+		escaped.WriteRune(r)
+	}
+	return escaped.String()
 }
 
 var codexRolloutTimestamp = regexp.MustCompile(`rollout-(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})-`)
@@ -201,7 +292,7 @@ func CodexCandidates(codexHome, project string) ([]Candidate, error) {
 		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".jsonl") {
 			return nil
 		}
-		sessionID, preview, matched, readErr := readCodexSession(path, resolvedProject)
+		sessionID, preview, _, matched, readErr := scanCodexSession(path, resolvedProject)
 		if readErr != nil || !matched {
 			return nil
 		}
@@ -219,16 +310,81 @@ func CodexCandidates(codexHome, project string) ([]Candidate, error) {
 	count := min(len(matches), maxCandidates)
 	candidates := make([]Candidate, count)
 	for i, m := range matches[:count] {
-		timestamp := m.startTime.Format("2006-01-02 15:04")
-		candidates[i] = Candidate{m.path, fmt.Sprintf("%s  %s  %s", timestamp, ShortID(m.sessionID), truncate(m.preview, 70))}
+		candidates[i] = Candidate{m.path, describe(m.startTime, m.sessionID, m.preview)}
 	}
 	return candidates, nil
 }
 
-func readCodexSession(path string, resolvedProject string) (sessionID string, preview string, matched bool, err error) {
+// FindCodexByID returns every Codex session under codexHome whose id
+// contains fragment, newest first, regardless of the project it was started
+// in. The id is part of the rollout filename, so the history is matched by
+// name and only the hits are opened.
+func FindCodexByID(codexHome, fragment string) ([]Match, error) {
+	fragment, err := normalizeFragment(fragment)
+	if err != nil {
+		return nil, err
+	}
+	sessionsDir := filepath.Join(codexHome, "sessions")
+	info, err := os.Stat(sessionsDir)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !info.IsDir() {
+		return nil, fmt.Errorf("not a Codex sessions directory: %s", sessionsDir)
+	}
+
+	var found []Match
+	err = filepath.WalkDir(sessionsDir, func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".jsonl") {
+			return nil
+		}
+		if !strings.Contains(strings.ToLower(codexIDPart(path)), fragment) {
+			return nil
+		}
+		// A file with no session_meta has neither a real id nor a cwd, so
+		// it can only be handed off blind -- skip it rather than offer it.
+		sessionID, preview, cwd, hasMeta, readErr := scanCodexSession(path, "")
+		if readErr != nil || !hasMeta {
+			return nil
+		}
+		startTime := codexSessionStartTime(path)
+		found = append(found, Match{
+			Candidate: Candidate{path, describe(startTime, sessionID, preview)},
+			SessionID: sessionID,
+			CWD:       cwd,
+			StartTime: startTime,
+		})
+		return nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	SortNewestFirst(found)
+	return found, nil
+}
+
+// codexIDPart strips the "rollout-<timestamp>-" prefix so an id fragment is
+// matched against the id alone -- otherwise a fragment like "2026-08" would
+// match every session recorded that month.
+func codexIDPart(path string) string {
+	base := strings.TrimSuffix(filepath.Base(path), ".jsonl")
+	if loc := codexRolloutTimestamp.FindStringIndex(base); loc != nil && loc[0] == 0 {
+		return base[loc[1]:]
+	}
+	return base
+}
+
+// scanCodexSession reads a rollout file's session id, first user message and
+// recorded cwd. When wantCwd is set, a session recorded elsewhere is reported
+// as not matched and the rest of the file is left unread; when it is empty,
+// every session with a session_meta entry matches.
+func scanCodexSession(path string, wantCwd string) (sessionID string, preview string, cwd string, matched bool, err error) {
 	file, err := os.Open(path)
 	if err != nil {
-		return "", "", false, err
+		return "", "", "", false, err
 	}
 	defer file.Close()
 	sessionID = "unknown UUID"
@@ -253,11 +409,17 @@ func readCodexSession(path string, resolvedProject string) (sessionID string, pr
 			if id, ok := payload["id"].(string); ok {
 				sessionID = id
 			}
-			cwd, _ := payload["cwd"].(string)
+			recorded, _ := payload["cwd"].(string)
+			if recorded != "" && cwd == "" {
+				cwd = recorded
+			}
 			haveCwd = true
-			resolvedCwd, resolveErr := filepath.Abs(cwd)
-			if cwd == "" || resolveErr != nil || resolvedCwd != resolvedProject {
-				return sessionID, preview, false, nil
+			if wantCwd == "" {
+				continue
+			}
+			resolvedCwd, resolveErr := filepath.Abs(recorded)
+			if recorded == "" || resolveErr != nil || resolvedCwd != wantCwd {
+				return sessionID, preview, cwd, false, nil
 			}
 		case "response_item":
 			if payload == nil {
@@ -266,18 +428,15 @@ func readCodexSession(path string, resolvedProject string) (sessionID string, pr
 			if role, _ := payload["role"].(string); role == "user" && preview == "" {
 				preview = strings.TrimSpace(strings.ReplaceAll(jsonlutil.TextContent(payload["content"]), "\n", " "))
 				if haveCwd {
-					return sessionID, preview, true, scanner.Err()
+					return sessionID, preview, cwd, true, scanner.Err()
 				}
 			}
 		}
 	}
 	if err := scanner.Err(); err != nil {
-		return "", "", false, err
+		return "", "", "", false, err
 	}
-	if !haveCwd {
-		return sessionID, preview, false, nil
-	}
-	return sessionID, preview, true, nil
+	return sessionID, preview, cwd, haveCwd, nil
 }
 
 func truncate(s string, max int) string {

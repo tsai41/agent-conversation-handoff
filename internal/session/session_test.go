@@ -301,6 +301,196 @@ func TestClaudeSessionStartTimeUsesFirstMessageTimestampNotMtime(t *testing.T) {
 	}
 }
 
+func TestFindCodexByIDMatchesFullIDAndPrefixAcrossProjects(t *testing.T) {
+	dir := t.TempDir()
+	codexHome := filepath.Join(dir, ".codex")
+	sessionsDir := filepath.Join(codexHome, "sessions", "2026", "08", "04")
+	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	elsewhere := filepath.Join(dir, "some-other-project")
+	if err := os.MkdirAll(elsewhere, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	wanted := "019fcb8e-b8cf-76b1-bc81-e444a74c4d60"
+	other := "019aaaaa-0000-0000-0000-000000000000"
+	wantedPath := filepath.Join(sessionsDir, "rollout-2026-08-04T14-55-56-"+wanted+".jsonl")
+	writeSession(t, wantedPath, mustAbs(t, elsewhere), wanted, "hand this over")
+	writeSession(t, filepath.Join(sessionsDir, "rollout-2026-08-04T09-00-00-"+other+".jsonl"), mustAbs(t, elsewhere), other, "unrelated")
+
+	for _, fragment := range []string{wanted, "019fcb8e", "019FCB8E"} {
+		matches, err := FindCodexByID(codexHome, fragment)
+		if err != nil {
+			t.Fatalf("fragment %q: %v", fragment, err)
+		}
+		if len(matches) != 1 {
+			t.Fatalf("fragment %q: expected 1 match, got %d: %+v", fragment, len(matches), matches)
+		}
+		if matches[0].Path != wantedPath {
+			t.Fatalf("fragment %q: expected %s, got %s", fragment, wantedPath, matches[0].Path)
+		}
+		if matches[0].SessionID != wanted {
+			t.Fatalf("fragment %q: expected session id %s, got %s", fragment, wanted, matches[0].SessionID)
+		}
+		// The session belongs to a different project than any caller's cwd;
+		// it must still be found, and report where it actually ran.
+		if matches[0].CWD != mustAbs(t, elsewhere) {
+			t.Fatalf("fragment %q: expected cwd %s, got %s", fragment, mustAbs(t, elsewhere), matches[0].CWD)
+		}
+	}
+}
+
+func TestFindCodexByIDIgnoresTheTimestampPartOfTheFilename(t *testing.T) {
+	dir := t.TempDir()
+	codexHome := filepath.Join(dir, ".codex")
+	sessionsDir := filepath.Join(codexHome, "sessions")
+	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	project := filepath.Join(dir, "project")
+	if err := os.MkdirAll(project, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeSession(t, filepath.Join(sessionsDir, "rollout-2026-07-20T09-00-00-abcdef12-0000-0000-0000-000000000000.jsonl"),
+		mustAbs(t, project), "abcdef12-0000-0000-0000-000000000000", "conversation")
+
+	matches, err := FindCodexByID(codexHome, "2026-07")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("expected the timestamp not to be matched as an id, got %+v", matches)
+	}
+}
+
+func TestFindCodexByIDReturnsNothingForAnUnknownID(t *testing.T) {
+	dir := t.TempDir()
+	codexHome := filepath.Join(dir, ".codex")
+	sessionsDir := filepath.Join(codexHome, "sessions")
+	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	project := filepath.Join(dir, "project")
+	if err := os.MkdirAll(project, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeSession(t, filepath.Join(sessionsDir, "rollout-2026-07-20T09-00-00-abcdef12-0000-0000-0000-000000000000.jsonl"),
+		mustAbs(t, project), "abcdef12-0000-0000-0000-000000000000", "conversation")
+
+	matches, err := FindCodexByID(codexHome, "ffffffff")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("expected no matches, got %+v", matches)
+	}
+}
+
+func TestFindClaudeByIDScansEveryProjectDirectory(t *testing.T) {
+	dir := t.TempDir()
+	claudeHome := filepath.Join(dir, ".claude")
+	wanted := "5e9bb808-3048-4569-bf1b-338f1101f7b0"
+	elsewhere := "/Users/someone/go/src/other"
+
+	for _, project := range []struct{ encoded, id, cwd string }{
+		{"-Users-someone-go-src-other", wanted, elsewhere},
+		{"-Users-someone-tmp", "11111111-0000-0000-0000-000000000000", "/Users/someone/tmp"},
+	} {
+		sessionDir := filepath.Join(claudeHome, "projects", project.encoded)
+		if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		line := fmt.Sprintf(`{"type":"user","sessionId":%q,"cwd":%q,"timestamp":"2026-08-04T09:00:00Z","message":{"content":"pick this up"}}`+"\n",
+			project.id, project.cwd)
+		if err := os.WriteFile(filepath.Join(sessionDir, project.id+".jsonl"), []byte(line), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	matches, err := FindClaudeByID(claudeHome, "5e9bb808")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("expected 1 match, got %d: %+v", len(matches), matches)
+	}
+	if matches[0].SessionID != wanted {
+		t.Fatalf("expected session id %s, got %s", wanted, matches[0].SessionID)
+	}
+	if matches[0].CWD != elsewhere {
+		t.Fatalf("expected cwd %s, got %s", elsewhere, matches[0].CWD)
+	}
+	if !strings.Contains(matches[0].Description, "5e9bb808…f7b0") {
+		t.Fatalf("expected truncated id in description, got %q", matches[0].Description)
+	}
+	if strings.Contains(matches[0].Description, wanted) {
+		t.Fatalf("full uuid leaked into description: %q", matches[0].Description)
+	}
+}
+
+func TestFindByIDRejectsFragmentsTooShortToBeSelective(t *testing.T) {
+	dir := t.TempDir()
+	for _, fragment := range []string{"", "  ", "01"} {
+		if _, err := FindClaudeByID(dir, fragment); err == nil {
+			t.Fatalf("expected an error for Claude id fragment %q", fragment)
+		}
+		if _, err := FindCodexByID(dir, fragment); err == nil {
+			t.Fatalf("expected an error for Codex id fragment %q", fragment)
+		}
+	}
+}
+
+func TestFindCodexByIDSkipsFilesWithoutSessionMeta(t *testing.T) {
+	dir := t.TempDir()
+	codexHome := filepath.Join(dir, ".codex")
+	sessionsDir := filepath.Join(codexHome, "sessions")
+	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	// No session_meta: neither a real id nor a cwd, so it must not be
+	// offered as something to hand off.
+	path := filepath.Join(sessionsDir, "rollout-2026-08-04T09-00-00-abcdef12-0000-0000-0000-000000000000.jsonl")
+	line := `{"type":"response_item","payload":{"role":"user","content":[{"type":"input_text","text":"orphan"}]}}` + "\n"
+	if err := os.WriteFile(path, []byte(line), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	matches, err := FindCodexByID(codexHome, "abcdef12")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 0 {
+		t.Fatalf("expected the metadata-less session to be skipped, got %+v", matches)
+	}
+}
+
+func TestFindByIDReportsStartTimeForCrossAccountOrdering(t *testing.T) {
+	dir := t.TempDir()
+	codexHome := filepath.Join(dir, ".codex")
+	sessionsDir := filepath.Join(codexHome, "sessions")
+	if err := os.MkdirAll(sessionsDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	project := filepath.Join(dir, "project")
+	if err := os.MkdirAll(project, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(sessionsDir, "rollout-2026-05-22T11-40-06-abcdef12-0000-0000-0000-000000000000.jsonl")
+	writeSession(t, path, mustAbs(t, project), "abcdef12-0000-0000-0000-000000000000", "conversation")
+
+	matches, err := FindCodexByID(codexHome, "abcdef12")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(matches) != 1 {
+		t.Fatalf("expected 1 match, got %d", len(matches))
+	}
+	want := time.Date(2026, 5, 22, 11, 40, 6, 0, time.Local)
+	if !matches[0].StartTime.Equal(want) {
+		t.Fatalf("got %v, want %v", matches[0].StartTime, want)
+	}
+}
+
 func writeSession(t *testing.T, path, cwd, id, preview string) {
 	t.Helper()
 	content := fmt.Sprintf(

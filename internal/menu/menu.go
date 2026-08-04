@@ -90,14 +90,34 @@ func pickSession(candidates []session.Candidate, prompt string) (string, error) 
 	return selected, nil
 }
 
+// stdinReader is shared: a fresh bufio.Reader per prompt would keep
+// whatever it read past the newline, losing later lines when input is piped
+// rather than typed.
+var stdinReader = bufio.NewReader(os.Stdin)
+
+func readLine(prompt string) string {
+	fmt.Print(prompt)
+	line, _ := stdinReader.ReadString('\n')
+	return strings.TrimSpace(line)
+}
+
 func readOptionalAlias(prompt string) string {
 	if prompt == "" {
 		prompt = "alias（選填）: "
 	}
-	fmt.Print(prompt)
-	reader := bufio.NewReader(os.Stdin)
-	line, _ := reader.ReadString('\n')
-	return strings.TrimSpace(line)
+	return readLine(prompt)
+}
+
+func providerCommand(providerName string) string {
+	if providerName == "codex" {
+		return "codex"
+	}
+	return "claude"
+}
+
+func cliInstalled(account registry.Account) bool {
+	_, err := exec.LookPath(providerCommand(account.Provider))
+	return err == nil
 }
 
 func sessionsForAccount(account registry.Account, project string) ([]session.Candidate, error) {
@@ -147,6 +167,13 @@ func RegistryHandoff(registryPath, sourceID, targetID, sessionPath, project stri
 	return nil
 }
 
+// manualIDRow is the sentinel path returned by pickSession when the user
+// chooses to type an id instead of picking a listed conversation. The
+// picker only ever lists real conversations for the current project, and
+// only the five newest of those, so a conversation the user knows the id of
+// is regularly absent from it -- the row exists so that is not a dead end.
+const manualIDRow = "action:manual-id"
+
 func interactiveRegistryHandoff(registryPath, project string) error {
 	r, err := registry.Load(registryPath)
 	if err != nil {
@@ -165,13 +192,10 @@ func interactiveRegistryHandoff(registryPath, project string) error {
 		}
 		sessionsByAccount[account.ID] = sessions
 	}
-	if len(sessionsByAccount) == 0 {
-		return fmt.Errorf("no registered account has conversations for this project")
-	}
 
-	sourceIDs := make([]string, 0, len(sessionsByAccount))
-	for id := range sessionsByAccount {
-		sourceIDs = append(sourceIDs, id)
+	sourceIDs := make([]string, 0, len(r.Accounts))
+	for _, account := range r.Accounts {
+		sourceIDs = append(sourceIDs, account.ID)
 	}
 	sort.Strings(sourceIDs)
 
@@ -179,14 +203,7 @@ func interactiveRegistryHandoff(registryPath, project string) error {
 	for _, sourceID := range sourceIDs {
 		for _, account := range r.Accounts {
 			targetID := account.ID
-			if targetID == sourceID {
-				continue
-			}
-			cliCommand := "claude"
-			if account.Provider == "codex" {
-				cliCommand = "codex"
-			}
-			if _, err := exec.LookPath(cliCommand); err != nil {
+			if targetID == sourceID || !cliInstalled(account) {
 				continue
 			}
 			directions = append(directions, kv{
@@ -204,11 +221,125 @@ func interactiveRegistryHandoff(registryPath, project string) error {
 	}
 	parts := strings.SplitN(chosen, "|", 2)
 	sourceID, targetID := parts[0], parts[1]
-	sessionPath, err := pickSession(sessionsByAccount[sourceID], fmt.Sprintf("選擇「%s」要接力的對話: ", labels[sourceID]))
+
+	sourceSessions := sessionsByAccount[sourceID]
+	candidates := make([]session.Candidate, 0, len(sourceSessions)+1)
+	candidates = append(candidates, sourceSessions...)
+	candidates = append(candidates, session.Candidate{Path: manualIDRow, Description: "✎ 手動輸入對話 ID"})
+	sessionPath, err := pickSession(candidates, fmt.Sprintf("選擇「%s」要接力的對話: ", labels[sourceID]))
 	if err != nil {
 		return err
 	}
+	if sessionPath == manualIDRow {
+		return manualIDHandoff(registryPath, r, labels, targetID, project)
+	}
 	return RegistryHandoff(registryPath, sourceID, targetID, sessionPath, project, true)
+}
+
+// manualIDHandoff resolves a conversation id typed by the user against every
+// registered account, so the source account comes from wherever the id was
+// actually found rather than from the direction picked beforehand.
+func manualIDHandoff(registryPath string, r registry.Registry, labels map[string]string, targetID, project string) error {
+	fragment := readLine("對話 ID（可只輸入前綴）: ")
+	if fragment == "" {
+		return fmt.Errorf("no conversation id entered")
+	}
+
+	type hit struct {
+		accountID string
+		match     session.Match
+	}
+	var hits []hit
+	var lookupErrors []string
+	for _, account := range r.Accounts {
+		var matches []session.Match
+		var err error
+		if account.Provider == "claude" {
+			matches, err = session.FindClaudeByID(account.Home, fragment)
+		} else {
+			matches, err = session.FindCodexByID(account.Home, fragment)
+		}
+		if err != nil {
+			// Keep searching the other accounts, but remember why this one
+			// produced nothing: "not found" and "could not look" must not
+			// reach the user as the same message.
+			lookupErrors = append(lookupErrors, fmt.Sprintf("%s: %s", labels[account.ID], err))
+			continue
+		}
+		for _, match := range matches {
+			hits = append(hits, hit{account.ID, match})
+		}
+	}
+	if len(hits) == 0 {
+		if len(lookupErrors) > 0 {
+			return fmt.Errorf("no conversation matches id %s; some accounts could not be searched (%s)", fragment, strings.Join(lookupErrors, "; "))
+		}
+		return fmt.Errorf("no conversation matches id: %s", fragment)
+	}
+
+	chosen := hits[0]
+	if len(hits) > 1 {
+		sort.SliceStable(hits, func(i, j int) bool { return hits[i].match.StartTime.After(hits[j].match.StartTime) })
+		byPath := map[string]hit{}
+		candidates := make([]session.Candidate, len(hits))
+		for i, h := range hits {
+			candidates[i] = session.Candidate{Path: h.match.Path, Description: fmt.Sprintf("%s  %s  %s", labels[h.accountID], h.match.Description, h.match.CWD)}
+			byPath[h.match.Path] = h
+		}
+		path, err := pickSession(candidates, "多筆符合，選擇要接力的對話: ")
+		if err != nil {
+			return err
+		}
+		chosen = byPath[path]
+	}
+
+	sourceID := chosen.accountID
+	if sourceID == targetID {
+		replacement, err := chooseTargetExcluding(r, labels, sourceID)
+		if err != nil {
+			return err
+		}
+		targetID = replacement
+	}
+	return finishManualHandoff(registryPath, sourceID, targetID, labels, chosen.match, project)
+}
+
+func finishManualHandoff(registryPath, sourceID, targetID string, labels map[string]string, match session.Match, project string) error {
+	// The direction picked before the id was typed may not be the direction
+	// being used: the source account is wherever the id turned up.
+	fmt.Printf("接力方向：「%s」→「%s」\n", labels[sourceID], labels[targetID])
+	if match.CWD != "" {
+		if resolved := resolvePath(project); match.CWD != resolved {
+			fmt.Printf("注意：這個對話原本在 %s 進行，交接資料會建立在 %s。\n", match.CWD, resolved)
+		}
+	}
+	return RegistryHandoff(registryPath, sourceID, targetID, match.Path, project, true)
+}
+
+// resolvePath follows symlinks so a project reached through one isn't
+// reported as a different project than the cwd the provider recorded.
+func resolvePath(path string) string {
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		return resolved
+	}
+	if absolute, err := filepath.Abs(path); err == nil {
+		return absolute
+	}
+	return path
+}
+
+func chooseTargetExcluding(r registry.Registry, labels map[string]string, sourceID string) (string, error) {
+	var candidates []kv
+	for _, account := range r.Accounts {
+		if account.ID == sourceID || !cliInstalled(account) {
+			continue
+		}
+		candidates = append(candidates, kv{account.ID, labels[account.ID]})
+	}
+	if len(candidates) == 0 {
+		return "", fmt.Errorf("no different target account is available")
+	}
+	return pickKey(candidates, "這個對話屬於原本選定的目標帳號，改選接手帳號: ", false)
 }
 
 func bootstrapRegistry(registryPath string) error {
@@ -398,11 +529,7 @@ func Run(registryPath string) error {
 		}
 		var candidates []kv
 		for _, account := range r.Accounts {
-			cliCommand := "claude"
-			if account.Provider == "codex" {
-				cliCommand = "codex"
-			}
-			if _, err := exec.LookPath(cliCommand); err == nil {
+			if cliInstalled(account) {
 				candidates = append(candidates, kv{account.ID, labels[account.ID]})
 			}
 		}

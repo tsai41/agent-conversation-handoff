@@ -99,6 +99,115 @@ func TestRunOffersNumberedShortcutsAndRestoresRealStdin(t *testing.T) {
 	}
 }
 
+// A project with no conversations at all used to be a dead end: the handoff
+// flow bailed out before showing anything. It must now still reach the
+// manual-id row, and an id typed there must resolve against every registered
+// account -- including a conversation recorded in a different project.
+func TestInteractiveHandoffAcceptsATypedIDWhenTheProjectHasNoConversations(t *testing.T) {
+	home := t.TempDir()
+	fakeBin := runWithFakePath(t, home)
+
+	project := filepath.Join(home, "project")
+	os.MkdirAll(project, 0o755)
+	elsewhere := filepath.Join(home, "elsewhere")
+	os.MkdirAll(elsewhere, 0o755)
+	resolvedElsewhere, err := filepath.EvalSymlinks(elsewhere)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claudeHome := filepath.Join(home, ".claude")
+	codexHome := filepath.Join(home, ".codex")
+	codexSessions := filepath.Join(codexHome, "sessions", "2026", "08", "04")
+	os.MkdirAll(claudeHome, 0o755)
+	os.MkdirAll(codexSessions, 0o755)
+
+	longUUID := "019fcb8e-b8cf-76b1-bc81-e444a74c4d60"
+	sessionPath := filepath.Join(codexSessions, "rollout-2026-08-04T14-55-56-"+longUUID+".jsonl")
+	os.WriteFile(sessionPath, []byte(fmt.Sprintf(
+		`{"type":"session_meta","payload":{"id":%q,"cwd":%q}}`+"\n"+
+			`{"type":"response_item","payload":{"role":"user","content":[{"type":"input_text","text":"carry this on"}]}}`+"\n",
+		longUUID, resolvedElsewhere)), 0o644)
+
+	registryPath := filepath.Join(home, "accounts.json")
+	registryJSON := fmt.Sprintf(`{
+		"version": 1,
+		"next_number": {"claude": 2, "codex": 2},
+		"accounts": [
+			{"id": "claude-1", "provider": "claude", "number": 1, "home": %q, "alias": ""},
+			{"id": "codex-1", "provider": "codex", "number": 1, "home": %q, "alias": ""}
+		]
+	}`, claudeHome, codexHome)
+	os.WriteFile(registryPath, []byte(registryJSON), 0o644)
+
+	// The direction picked here is claude-1 -> codex-1, but the typed id
+	// belongs to codex-1, so the source flips to codex-1 and the target has
+	// to be re-picked (step 3).
+	state := filepath.Join(home, "state")
+	sessionRows := filepath.Join(home, "session-rows")
+	writeScript(t, filepath.Join(fakeBin, "fzf"), fmt.Sprintf(`#!/usr/bin/env bash
+n=$(cat %q 2>/dev/null || echo 0)
+if [ "$n" -eq 2 ]; then cat > %q; fi
+values=("action:handoff" "claude-1|codex-1" "action:manual-id" "claude-1")
+printf '%%s\n' "${values[$n]}"
+echo $((n+1)) > %q
+`, state, sessionRows, state))
+
+	launched := filepath.Join(home, "launched")
+	writeScript(t, filepath.Join(fakeBin, "claude"), fmt.Sprintf(
+		"#!/usr/bin/env bash\nif [ \"$1 $2\" = 'auth status' ]; then exit 0; fi\nprintf '%%s|%%s' \"$CLAUDE_CONFIG_DIR\" \"$1\" > %q\n",
+		launched,
+	))
+	writeScript(t, filepath.Join(fakeBin, "codex"), "#!/usr/bin/env bash\nexit 0\n")
+
+	cmd := exec.Command(os.Args[0], "-test.run=TestHelperRunMenu")
+	cmd.Dir = project
+	cmd.Env = append(os.Environ(), "GO_WANT_HELPER_MENU_PROCESS=1", "ACH_TEST_REGISTRY="+registryPath)
+	cmd.Stdin = strings.NewReader("019fcb8e\n")
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("menu run failed: %v\nstderr: %s", err, stderr.String())
+	}
+
+	rows, err := os.ReadFile(sessionRows)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(rows), "手動輸入對話 ID") {
+		t.Fatalf("expected the manual-id row to be offered, got: %s", rows)
+	}
+	if !strings.Contains(stdout.String(), resolvedElsewhere) {
+		t.Fatalf("expected a warning naming the conversation's original project, got: %s", stdout.String())
+	}
+
+	launchedContent, err := os.ReadFile(launched)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(launchedContent), "transcript.md") {
+		t.Fatalf("expected the claude account to be launched at the new artifact, got %q", launchedContent)
+	}
+
+	var sourcePath string
+	filepath.Walk(filepath.Join(project, ".agent-handoffs"), func(path string, info os.FileInfo, err error) error {
+		if err == nil && filepath.Base(path) == "manifest.json" {
+			raw, _ := os.ReadFile(path)
+			var manifest map[string]any
+			json.Unmarshal(raw, &manifest)
+			source, _ := manifest["source"].(map[string]any)
+			sourcePath, _ = source["path"].(string)
+		}
+		return nil
+	})
+	if sourcePath == "" {
+		t.Fatal("expected a handoff artifact manifest.json to be created")
+	}
+	if filepath.Base(sourcePath) != filepath.Base(sessionPath) {
+		t.Fatalf("expected the artifact to snapshot the typed conversation, got %q", sourcePath)
+	}
+}
+
 // TestHelperRunMenu is not a real test; it's exec'd as a subprocess by
 // TestRunOffersNumberedShortcutsAndRestoresRealStdin so menu.Run's exec
 // into the (faked) provider CLI doesn't replace the test binary itself.
