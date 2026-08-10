@@ -236,6 +236,82 @@ func interactiveRegistryHandoff(registryPath, project string) error {
 	return RegistryHandoff(registryPath, sourceID, targetID, sessionPath, project, true)
 }
 
+// QuickHandoff finds a Claude conversation by id fragment and hands it to a
+// Codex account. When exactly one Codex account is available, no picker is
+// opened; multiple Codex accounts are resolved with one target picker.
+func QuickHandoff(registryPath, fragment, project string) error {
+	r, err := registry.Load(registryPath)
+	if err != nil {
+		return err
+	}
+	labels := map[string]string{}
+	for _, row := range registry.Rows(r) {
+		labels[row.ID] = row.Label
+	}
+
+	targetID, err := chooseCodexTarget(r, labels)
+	if err != nil {
+		return err
+	}
+
+	type hit struct {
+		accountID string
+		match     session.Match
+	}
+	var hits []hit
+	for _, account := range r.Accounts {
+		if account.Provider != "claude" {
+			continue
+		}
+		matches, findErr := session.FindClaudeByID(account.Home, fragment)
+		if findErr != nil {
+			continue
+		}
+		for _, match := range matches {
+			hits = append(hits, hit{account.ID, match})
+		}
+	}
+	if len(hits) == 0 {
+		return fmt.Errorf("no Claude conversation matches id: %s", fragment)
+	}
+
+	chosen := hits[0]
+	if len(hits) > 1 {
+		byPath := map[string]hit{}
+		candidates := make([]session.Candidate, len(hits))
+		for i, h := range hits {
+			candidates[i] = session.Candidate{
+				Path:        h.match.Path,
+				Description: fmt.Sprintf("%s  %s  %s", labels[h.accountID], h.match.Description, h.match.CWD),
+			}
+			byPath[h.match.Path] = h
+		}
+		path, pickErr := pickSession(candidates, "多筆符合，選擇要接力的對話: ")
+		if pickErr != nil {
+			return pickErr
+		}
+		chosen = byPath[path]
+	}
+
+	return finishManualHandoff(registryPath, chosen.accountID, targetID, labels, chosen.match, project)
+}
+
+func chooseCodexTarget(r registry.Registry, labels map[string]string) (string, error) {
+	var candidates []kv
+	for _, account := range r.Accounts {
+		if account.Provider == "codex" && cliInstalled(account) {
+			candidates = append(candidates, kv{account.ID, labels[account.ID]})
+		}
+	}
+	if len(candidates) == 0 {
+		return "", fmt.Errorf("no different target account is available")
+	}
+	if len(candidates) == 1 {
+		return candidates[0].Key, nil
+	}
+	return pickKey(candidates, "選擇接手的 Codex 帳號: ", false)
+}
+
 // manualIDHandoff resolves a conversation id typed by the user against every
 // registered account, so the source account comes from wherever the id was
 // actually found rather than from the direction picked beforehand.

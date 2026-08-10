@@ -99,6 +99,67 @@ func TestRunOffersNumberedShortcutsAndRestoresRealStdin(t *testing.T) {
 	}
 }
 
+func TestQuickHandoffByIDFindsClaudeConversationAndLaunchesCodex(t *testing.T) {
+	home := t.TempDir()
+	runWithFakePath(t, home)
+
+	project := filepath.Join(home, "project")
+	if err := os.MkdirAll(project, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	claudeHome := filepath.Join(home, ".claude")
+	codexHome := filepath.Join(home, ".codex")
+	resolvedProject, err := filepath.EvalSymlinks(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectID := strings.NewReplacer("/", "-", "_", "-").Replace(resolvedProject)
+	claudeProjectDir := filepath.Join(claudeHome, "projects", projectID)
+	if err := os.MkdirAll(claudeProjectDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(codexHome, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	id := "019fcb8e-b8cf-76b1-bc81-e444a74c4d60"
+	sessionPath := filepath.Join(claudeProjectDir, id+".jsonl")
+	content := fmt.Sprintf(`{"type":"user","sessionId":%q,"message":{"content":"continue this"}}`+"\n", id)
+	if err := os.WriteFile(sessionPath, []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	registryPath := filepath.Join(home, "accounts.json")
+	registryJSON := fmt.Sprintf(`{
+		"version": 1,
+		"next_number": {"claude": 2, "codex": 2},
+		"accounts": [
+			{"id": "claude-1", "provider": "claude", "number": 1, "home": %q, "alias": ""},
+			{"id": "codex-1", "provider": "codex", "number": 1, "home": %q, "alias": ""}
+		]
+	}`, claudeHome, codexHome)
+	if err := os.WriteFile(registryPath, []byte(registryJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	launched := filepath.Join(home, "launched")
+	writeScript(t, filepath.Join(home, "bin", "codex"), fmt.Sprintf(
+		"#!/usr/bin/env bash\nif [ \"$1 $2\" = 'login status' ]; then exit 0; fi\nprintf '%%s|%%s' \"$CODEX_HOME\" \"$1\" > %q\n", launched,
+	))
+	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
+
+	if err := QuickHandoff(registryPath, "019fcb8e", project); err != nil {
+		t.Fatalf("quick handoff failed: %v", err)
+	}
+	launchedContent, err := os.ReadFile(launched)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(launchedContent), "transcript.md") {
+		t.Fatalf("expected codex to launch from the artifact, got %q", launchedContent)
+	}
+}
+
 // A project with no conversations at all used to be a dead end: the handoff
 // flow bailed out before showing anything. It must now still reach the
 // manual-id row, and an id typed there must resolve against every registered

@@ -41,6 +41,21 @@ func main() {
 	}
 
 	switch command {
+	case "h", "quick-handoff":
+		fs := flag.NewFlagSet("handoff", flag.ExitOnError)
+		registryPath := fs.String("registry", defaultRegistryPath(), "")
+		fs.Parse(args)
+		if len(fs.Args()) != 1 {
+			fail(fmt.Errorf("usage: ccs h [--registry path] <conversation-id>"))
+		}
+		cwd, err := os.Getwd()
+		if err != nil {
+			fail(err)
+		}
+		if err := menu.QuickHandoff(*registryPath, fs.Args()[0], cwd); err != nil {
+			fail(err)
+		}
+
 	case "create":
 		fs := flag.NewFlagSet("create", flag.ExitOnError)
 		source := fs.String("source", "", "")

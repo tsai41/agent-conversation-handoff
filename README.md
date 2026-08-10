@@ -64,6 +64,14 @@ make install COMMAND=ccs
 ccs
 ```
 
+如果已經知道 Claude 對話 ID，推薦直接使用快捷模式：
+
+```bash
+ccs h 019fcb8e
+```
+
+快捷模式會自動搜尋所有已登記的 Claude 帳號，並交給已安裝的 Codex 帳號；只有多個 Codex 帳號可用時才會顯示目標選單。`quick-handoff` 是同一功能的完整別名。
+
 第一次執行會偵測常見既有帳號目錄，例如：
 
 ```text
