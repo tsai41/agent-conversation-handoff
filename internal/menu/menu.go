@@ -549,30 +549,69 @@ func chooseRegisteredAccount(r registry.Registry, crumbs, prompt string) (string
 	return pickKey(candidates, crumbs, prompt, true)
 }
 
-// seededKeys are the settings a brand-new account inherits from the first
-// account of the same provider. A freshly created account home is an empty
-// directory, so without this a new Claude account starts with no status
-// line while every account beside it has one.
-var seededKeys = []string{"statusLine"}
-
-// seedAccountDefaults is best-effort by design: an account that inherited
-// nothing is still a working account, so a failure here is reported and
-// stepped over rather than blocking the login that follows.
-func seedAccountDefaults(r registry.Registry, account registry.Account) {
+// offerSharedSettings asks whether a brand-new account should read the same
+// settings document as the first account of its provider. Declining leaves
+// an empty home, which is a real choice, so this asks rather than decides.
+// A failure to link is reported and stepped over; the login matters more.
+func offerSharedSettings(r registry.Registry, account registry.Account, crumbs string) {
 	source, found := registry.PrimaryAccount(r, account.Provider)
 	if !found || source.ID == account.ID {
 		return
 	}
 	labels := accountLabels(r)
-	for _, key := range seededKeys {
-		copied, err := registry.CopySettingsKey(source.Home, account.Home, key)
-		if err != nil {
-			fmt.Printf("提醒: 無法從「%s」帶入 %s 設定: %s\n", labels[source.ID], key, err)
+	choice, err := pickKey([]kv{
+		{"share", fmt.Sprintf("共用「%s」的設定", labels[source.ID])},
+		{"own", "這個帳號自己一份設定"},
+	}, crumbs, "新帳號的設定: ", true)
+	if err != nil || choice != "share" {
+		return
+	}
+	share, err := registry.ShareSettings(source, account, false)
+	if err != nil {
+		fmt.Printf("提醒: 未能共用「%s」的設定: %s\n", labels[source.ID], err)
+		return
+	}
+	if share.Linked {
+		fmt.Printf("設定已共用自「%s」。\n", labels[source.ID])
+	}
+}
+
+// shareAllAccountSettings relinks every account onto the first account of
+// its provider. Unlike account creation this replaces a document the
+// account already has, so the original is moved aside and named rather than
+// assumed unwanted.
+func shareAllAccountSettings(r registry.Registry) {
+	labels := accountLabels(r)
+	candidates := 0
+	reported := false
+	for _, account := range r.Accounts {
+		source, found := registry.PrimaryAccount(r, account.Provider)
+		if !found || source.ID == account.ID {
 			continue
 		}
-		if copied {
-			fmt.Printf("已從「%s」帶入 %s 設定。\n", labels[source.ID], key)
+		candidates++
+		share, err := registry.ShareSettings(source, account, true)
+		// Named before the error is handled: a document moved aside by a
+		// share that then failed is exactly the one nobody must lose.
+		if share.Backup != "" {
+			fmt.Printf("%s: 原設定已備份到 %s\n", labels[account.ID], share.Backup)
+			reported = true
 		}
+		if err != nil {
+			fmt.Printf("%s: 未共用: %s\n", labels[account.ID], err)
+			reported = true
+			continue
+		}
+		if share.Linked {
+			fmt.Printf("%s: 已改為共用「%s」的設定\n", labels[account.ID], labels[source.ID])
+			reported = true
+		}
+	}
+	switch {
+	case candidates == 0:
+		fmt.Println("每個 provider 都只有一個帳號，沒有可以共用的對象。")
+	case !reported:
+		fmt.Println("所有帳號都已經在共用設定了。")
 	}
 }
 
@@ -583,6 +622,7 @@ func manageAccounts(registryPath string) error {
 			{"add", "新增帳號"},
 			{"rename", "修改 alias"},
 			{"login", "登入／重新登入"},
+			{"share", "共用設定到所有帳號"},
 			{"remove", "從 ccs 移除帳號"},
 			{"import", "匯入既有帳號目錄"},
 			{"back", "返回主選單"},
@@ -626,13 +666,27 @@ func manageAccounts(registryPath string) error {
 				if err != nil {
 					return err
 				}
-				// Seeding reads the registry the account was just added
-				// to, so it has to be reloaded rather than reusing the
-				// copy this loop started with.
+				// The registry has to be reloaded: the account being
+				// offered a share was only just added to it.
 				if updated, loadErr := registry.Load(registryPath); loadErr == nil {
-					seedAccountDefaults(updated, account)
+					offerSharedSettings(updated, account, actionCrumbs)
 				}
 				return provider.Login(account)
+			}
+		case "share":
+			r, err := registry.Load(registryPath)
+			if err != nil {
+				return err
+			}
+			confirmation, err := pickKey([]kv{
+				{"confirm", "每個帳號都改讀第一個同 provider 帳號的設定檔"},
+				{"cancel", "取消"},
+			}, actionCrumbs, "確認共用設定: ", true)
+			if err != nil {
+				return err
+			}
+			if confirmation == "confirm" {
+				shareAllAccountSettings(r)
 			}
 		case "rename":
 			r, err := registry.Load(registryPath)

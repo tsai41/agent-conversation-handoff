@@ -1,141 +1,227 @@
 package registry
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
 )
 
-func readJSON(t *testing.T, path string) map[string]any {
+func account(id, provider, home string, number int) Account {
+	return Account{ID: id, Provider: provider, Number: number, Home: home}
+}
+
+// homes builds a source home holding a settings document and an empty
+// target home, the shape account creation produces.
+func homes(t *testing.T, provider, content string) (Account, Account) {
 	t.Helper()
-	raw, err := os.ReadFile(path)
+	dir := t.TempDir()
+	sourceHome := filepath.Join(dir, "source")
+	targetHome := filepath.Join(dir, "target")
+	if err := os.MkdirAll(sourceHome, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(targetHome, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	source := account("src-1", provider, sourceHome, 1)
+	if content != "" {
+		if err := os.WriteFile(SettingsPath(source), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return source, account("tgt-2", provider, targetHome, 2)
+}
+
+func assertLinkedTo(t *testing.T, target Account, want string) {
+	t.Helper()
+	path := SettingsPath(target)
+	info, err := os.Lstat(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	var out map[string]any
-	if err := json.Unmarshal(raw, &out); err != nil {
-		t.Fatalf("%s is not valid JSON: %v", path, err)
+	if info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("%s is not a symlink", path)
 	}
-	return out
-}
-
-func TestCopySettingsKeySeedsAnAccountHomeThatHasNoSettingsYet(t *testing.T) {
-	dir := t.TempDir()
-	source := filepath.Join(dir, "source")
-	target := filepath.Join(dir, "target")
-	os.MkdirAll(source, 0o755)
-	os.MkdirAll(target, 0o755)
-	os.WriteFile(filepath.Join(source, "settings.json"), []byte(
-		`{"theme":"dark","statusLine":{"type":"command","command":"~/.claude/statusline-go","padding":0}}`), 0o600)
-
-	copied, err := CopySettingsKey(source, target, "statusLine")
+	link, err := os.Readlink(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !copied {
-		t.Fatal("expected the key to be copied into an empty account home")
-	}
-	got := readJSON(t, filepath.Join(target, "settings.json"))
-	statusLine, ok := got["statusLine"].(map[string]any)
-	if !ok {
-		t.Fatalf("expected a statusLine object, got %#v", got["statusLine"])
-	}
-	if statusLine["command"] != "~/.claude/statusline-go" {
-		t.Fatalf("expected the source command to come across, got %#v", statusLine)
-	}
-	if _, leaked := got["theme"]; leaked {
-		t.Fatalf("only the named key should be copied, got %#v", got)
+	if link != want {
+		t.Fatalf("expected the link to point at %q, got %q", want, link)
 	}
 }
 
-func TestCopySettingsKeyKeepsTheTargetsOwnSettings(t *testing.T) {
-	dir := t.TempDir()
-	source := filepath.Join(dir, "source")
-	target := filepath.Join(dir, "target")
-	os.MkdirAll(source, 0o755)
-	os.MkdirAll(target, 0o755)
-	os.WriteFile(filepath.Join(source, "settings.json"), []byte(`{"statusLine":{"type":"command"}}`), 0o600)
-	os.WriteFile(filepath.Join(target, "settings.json"), []byte(`{"theme":"dark","tui":"fullscreen"}`), 0o600)
+func TestShareSettingsLinksAFreshAccountHome(t *testing.T) {
+	source, target := homes(t, "claude", `{"statusLine":{"command":"x"}}`)
 
-	if _, err := CopySettingsKey(source, target, "statusLine"); err != nil {
-		t.Fatal(err)
-	}
-	got := readJSON(t, filepath.Join(target, "settings.json"))
-	if got["theme"] != "dark" || got["tui"] != "fullscreen" {
-		t.Fatalf("expected the target's own settings to survive, got %#v", got)
-	}
-	if _, ok := got["statusLine"]; !ok {
-		t.Fatalf("expected the seeded key to be present, got %#v", got)
-	}
-}
-
-// Seeding fills a gap; it does not push one account's preference onto an
-// account that already made a choice.
-func TestCopySettingsKeyNeverOverwritesAKeyTheTargetAlreadySets(t *testing.T) {
-	dir := t.TempDir()
-	source := filepath.Join(dir, "source")
-	target := filepath.Join(dir, "target")
-	os.MkdirAll(source, 0o755)
-	os.MkdirAll(target, 0o755)
-	os.WriteFile(filepath.Join(source, "settings.json"), []byte(`{"statusLine":{"command":"from-source"}}`), 0o600)
-	os.WriteFile(filepath.Join(target, "settings.json"), []byte(`{"statusLine":{"command":"already-mine"}}`), 0o600)
-
-	copied, err := CopySettingsKey(source, target, "statusLine")
+	share, err := ShareSettings(source, target, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if copied {
-		t.Fatal("expected no copy when the target already sets the key")
+	if share.Before != SettingsMissing || !share.Linked || share.Backup != "" {
+		t.Fatalf("expected a plain link of an empty home, got %+v", share)
 	}
-	got := readJSON(t, filepath.Join(target, "settings.json"))
-	statusLine := got["statusLine"].(map[string]any)
-	if statusLine["command"] != "already-mine" {
-		t.Fatalf("the target's own value was overwritten: %#v", statusLine)
+	assertLinkedTo(t, target, SettingsPath(source))
+
+	// Reading through the link must give the source document, and a write
+	// to the source must be visible through it.
+	if err := os.WriteFile(SettingsPath(source), []byte(`{"theme":"dark"}`), 0o600); err != nil {
+		t.Fatal(err)
 	}
-}
-
-func TestCopySettingsKeyIsANoOpWhenTheSourceHasNothingToGive(t *testing.T) {
-	dir := t.TempDir()
-	source := filepath.Join(dir, "source")
-	target := filepath.Join(dir, "target")
-	os.MkdirAll(source, 0o755)
-	os.MkdirAll(target, 0o755)
-	os.WriteFile(filepath.Join(source, "settings.json"), []byte(`{"theme":"dark"}`), 0o600)
-
-	copied, err := CopySettingsKey(source, target, "statusLine")
+	raw, err := os.ReadFile(SettingsPath(target))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if copied {
-		t.Fatal("expected nothing to be copied")
-	}
-	if _, err := os.Stat(filepath.Join(target, "settings.json")); !os.IsNotExist(err) {
-		t.Fatal("expected no settings file to be created for the target")
+	if string(raw) != `{"theme":"dark"}` {
+		t.Fatalf("the accounts are not reading one file, got %q", raw)
 	}
 }
 
-// A settings file that cannot be parsed must not be replaced by one built
-// from a partial reading of it.
-func TestCopySettingsKeyRefusesToRewriteUnparseableTargetSettings(t *testing.T) {
-	dir := t.TempDir()
-	source := filepath.Join(dir, "source")
-	target := filepath.Join(dir, "target")
-	os.MkdirAll(source, 0o755)
-	os.MkdirAll(target, 0o755)
-	os.WriteFile(filepath.Join(source, "settings.json"), []byte(`{"statusLine":{"command":"x"}}`), 0o600)
-	targetPath := filepath.Join(target, "settings.json")
-	os.WriteFile(targetPath, []byte("{not json"), 0o600)
-
-	if _, err := CopySettingsKey(source, target, "statusLine"); err == nil {
-		t.Fatal("expected an error rather than a silent rewrite")
+func TestShareSettingsIsANoOpWhenAlreadyShared(t *testing.T) {
+	source, target := homes(t, "claude", `{"a":1}`)
+	if _, err := ShareSettings(source, target, false); err != nil {
+		t.Fatal(err)
 	}
-	raw, err := os.ReadFile(targetPath)
+
+	share, err := ShareSettings(source, target, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(raw) != "{not json" {
-		t.Fatalf("the unparseable file was modified: %q", raw)
+	if share.Before != SettingsShared || share.Linked || share.Backup != "" {
+		t.Fatalf("expected an already-shared no-op, got %+v", share)
+	}
+}
+
+// Account creation must never consume a document the account already has.
+func TestShareSettingsRefusesAnAccountsOwnDocumentUnlessReplacing(t *testing.T) {
+	source, target := homes(t, "claude", `{"a":1}`)
+	targetPath := SettingsPath(target)
+	if err := os.WriteFile(targetPath, []byte(`{"mine":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	share, err := ShareSettings(source, target, false)
+	if err == nil {
+		t.Fatal("expected sharing to refuse an account's own settings")
+	}
+	if share.Before != SettingsOwn || share.Linked {
+		t.Fatalf("expected the refusal to report an own document, got %+v", share)
+	}
+	raw, _ := os.ReadFile(targetPath)
+	if string(raw) != `{"mine":true}` {
+		t.Fatalf("the account's own settings were modified: %q", raw)
+	}
+}
+
+func TestShareSettingsMovesAnOwnDocumentAsideWhenReplacing(t *testing.T) {
+	source, target := homes(t, "claude", `{"a":1}`)
+	targetPath := SettingsPath(target)
+	if err := os.WriteFile(targetPath, []byte(`{"mine":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	share, err := ShareSettings(source, target, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if share.Before != SettingsOwn || !share.Linked || share.Backup == "" {
+		t.Fatalf("expected a replaced document with a backup, got %+v", share)
+	}
+	assertLinkedTo(t, target, SettingsPath(source))
+	raw, err := os.ReadFile(share.Backup)
+	if err != nil {
+		t.Fatalf("the backup named in the result is not readable: %v", err)
+	}
+	if string(raw) != `{"mine":true}` {
+		t.Fatalf("the backup does not hold the original document: %q", raw)
+	}
+}
+
+// A link someone pointed somewhere deliberately is not this code's to
+// repoint, replace or no replace.
+func TestShareSettingsRefusesALinkToSomewhereElse(t *testing.T) {
+	source, target := homes(t, "claude", `{"a":1}`)
+	elsewhere := filepath.Join(t.TempDir(), "elsewhere.json")
+	if err := os.WriteFile(elsewhere, []byte(`{"other":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	targetPath := SettingsPath(target)
+	if err := os.Symlink(elsewhere, targetPath); err != nil {
+		t.Fatal(err)
+	}
+
+	for _, replace := range []bool{false, true} {
+		share, err := ShareSettings(source, target, replace)
+		if err == nil {
+			t.Fatalf("expected a refusal with replace=%v", replace)
+		}
+		if share.Before != SettingsForeign {
+			t.Fatalf("expected a foreign link to be reported, got %+v", share)
+		}
+		link, _ := os.Readlink(targetPath)
+		if link != elsewhere {
+			t.Fatalf("the existing link was repointed to %q", link)
+		}
+	}
+}
+
+// Linking to a file that is not there would leave a broken link behind,
+// which reads as "shared" forever after.
+func TestShareSettingsRefusesASourceWithNoDocument(t *testing.T) {
+	source, target := homes(t, "claude", "")
+
+	if _, err := ShareSettings(source, target, true); err == nil {
+		t.Fatal("expected sharing to refuse a source with no settings document")
+	}
+	if _, err := os.Lstat(SettingsPath(target)); !os.IsNotExist(err) {
+		t.Fatal("expected no link to be created against a missing source")
+	}
+}
+
+func TestShareSettingsRefusesAnAccountSharingWithItself(t *testing.T) {
+	source, _ := homes(t, "claude", `{"a":1}`)
+
+	if _, err := ShareSettings(source, source, true); err == nil {
+		t.Fatal("expected an account not to share settings with itself")
+	}
+}
+
+func TestShareSettingsUsesTheProvidersOwnSettingsFile(t *testing.T) {
+	source, target := homes(t, "codex", "model = \"gpt-5\"\n")
+	if filepath.Base(SettingsPath(source)) != "config.toml" {
+		t.Fatalf("expected codex to use config.toml, got %q", SettingsPath(source))
+	}
+
+	if _, err := ShareSettings(source, target, false); err != nil {
+		t.Fatal(err)
+	}
+	assertLinkedTo(t, target, SettingsPath(source))
+}
+
+func TestSettingsPathIsEmptyForAnUnknownProvider(t *testing.T) {
+	if path := SettingsPath(account("x-1", "gemini", "/tmp/x", 1)); path != "" {
+		t.Fatalf("expected no settings path for an unknown provider, got %q", path)
+	}
+}
+
+// A relative link is still a link to the source; resolving it against the
+// directory holding it is what makes that visible.
+func TestShareSettingsRecognisesARelativeLinkToTheSource(t *testing.T) {
+	source, target := homes(t, "claude", `{"a":1}`)
+	relative, err := filepath.Rel(target.Home, SettingsPath(source))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(relative, SettingsPath(target)); err != nil {
+		t.Fatal(err)
+	}
+
+	share, err := ShareSettings(source, target, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if share.Before != SettingsShared || share.Linked {
+		t.Fatalf("expected a relative link to count as already shared, got %+v", share)
 	}
 }
 
@@ -146,55 +232,142 @@ func TestPrimaryAccountIsTheLowestNumberedOfItsProvider(t *testing.T) {
 		{ID: "claude-1", Provider: "claude", Number: 1},
 		{ID: "claude-2", Provider: "claude", Number: 2},
 	}}
-	account, found := PrimaryAccount(r, "claude")
-	if !found || account.ID != "claude-1" {
-		t.Fatalf("expected claude-1, got %q (found=%v)", account.ID, found)
+	found, ok := PrimaryAccount(r, "claude")
+	if !ok || found.ID != "claude-1" {
+		t.Fatalf("expected claude-1, got %q (found=%v)", found.ID, ok)
 	}
-	if _, found := PrimaryAccount(r, "gemini"); found {
+	if _, ok := PrimaryAccount(r, "gemini"); ok {
 		t.Fatal("expected no account for an unregistered provider")
 	}
 }
 
-// A JSON `null` document unmarshals into a nil map without erroring, so it
-// slips past the "not a JSON object" check and then panics on the first
-// write. It is no more an object than a truncated file is.
-func TestCopySettingsKeyRejectsANullSettingsDocument(t *testing.T) {
+// Two registry entries can name one physical home when one path reaches it
+// through a symlink. Comparing ids alone let that through, and the result
+// was the source document renamed away and replaced by a link to itself.
+func TestShareSettingsRefusesTwoAccountsOnOnePhysicalHome(t *testing.T) {
 	dir := t.TempDir()
-	source := filepath.Join(dir, "source")
-	target := filepath.Join(dir, "target")
-	os.MkdirAll(source, 0o755)
-	os.MkdirAll(target, 0o755)
-	os.WriteFile(filepath.Join(source, "settings.json"), []byte(`{"statusLine":{"command":"x"}}`), 0o600)
-	targetPath := filepath.Join(target, "settings.json")
-	os.WriteFile(targetPath, []byte("null"), 0o600)
+	realHome := filepath.Join(dir, "claude")
+	aliasHome := filepath.Join(dir, "claude-alias")
+	if err := os.MkdirAll(realHome, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(realHome, aliasHome); err != nil {
+		t.Fatal(err)
+	}
+	source := account("claude-1", "claude", realHome, 1)
+	alias := account("claude-2", "claude", aliasHome, 2)
+	if err := os.WriteFile(SettingsPath(source), []byte(`{"real":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
-	copied, err := CopySettingsKey(source, target, "statusLine")
-	if err == nil {
-		t.Fatal("expected an error rather than a panic or a silent rewrite")
+	if _, err := ShareSettings(source, alias, true); err == nil {
+		t.Fatal("expected sharing to refuse two accounts on one home")
 	}
-	if copied {
-		t.Fatal("expected nothing to be copied")
+	info, err := os.Lstat(SettingsPath(source))
+	if err != nil {
+		t.Fatalf("the source settings document is gone: %v", err)
 	}
-	raw, readErr := os.ReadFile(targetPath)
-	if readErr != nil {
-		t.Fatal(readErr)
+	if info.Mode()&os.ModeSymlink != 0 {
+		t.Fatal("the source settings document was replaced by a symlink")
 	}
-	if string(raw) != "null" {
-		t.Fatalf("the null document was modified: %q", raw)
+	raw, err := os.ReadFile(SettingsPath(source))
+	if err != nil || string(raw) != `{"real":true}` {
+		t.Fatalf("the source settings document was damaged: %q (%v)", raw, err)
+	}
+	entries, err := os.ReadDir(realHome)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected nothing moved aside, found %d entries", len(entries))
 	}
 }
 
-// The source side reads through the same helper, so a null document there
-// must not take the process down either.
-func TestCopySettingsKeyRejectsANullSourceDocument(t *testing.T) {
-	dir := t.TempDir()
-	source := filepath.Join(dir, "source")
-	target := filepath.Join(dir, "target")
-	os.MkdirAll(source, 0o755)
-	os.MkdirAll(target, 0o755)
-	os.WriteFile(filepath.Join(source, "settings.json"), []byte("null"), 0o600)
+// The backup name has second resolution and os.Rename overwrites silently,
+// so a second share inside the same second must not consume the first
+// backup.
+func TestShareSettingsDoesNotOverwriteAnEarlierBackup(t *testing.T) {
+	source, target := homes(t, "claude", `{"shared":true}`)
+	targetPath := SettingsPath(target)
+	if err := os.WriteFile(targetPath, []byte(`{"first":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
 
-	if _, err := CopySettingsKey(source, target, "statusLine"); err == nil {
-		t.Fatal("expected an error for a null source document")
+	first, err := ShareSettings(source, target, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Break the link the way an atomic save would, with different content
+	// so neither backup is treated as redundant.
+	if err := os.Remove(targetPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(targetPath, []byte(`{"second":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	second, err := ShareSettings(source, target, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if first.Backup == second.Backup {
+		t.Fatalf("both shares used the same backup path: %s", first.Backup)
+	}
+	raw, err := os.ReadFile(first.Backup)
+	if err != nil {
+		t.Fatalf("the first backup is gone: %v", err)
+	}
+	if string(raw) != `{"first":true}` {
+		t.Fatalf("the first backup was overwritten: %q", raw)
+	}
+}
+
+// Re-sharing after something replaced the link with an identical copy is
+// the ordinary repair. Keeping a backup of a file the link already points
+// at leaves the user a .bak to diff for no reason.
+func TestShareSettingsKeepsNoBackupOfAnIdenticalDocument(t *testing.T) {
+	source, target := homes(t, "claude", `{"shared":true}`)
+	targetPath := SettingsPath(target)
+	if err := os.WriteFile(targetPath, []byte(`{"shared":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	share, err := ShareSettings(source, target, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !share.Linked {
+		t.Fatalf("expected the account to be relinked, got %+v", share)
+	}
+	if share.Backup != "" {
+		t.Fatalf("expected no backup of an identical document, got %s", share.Backup)
+	}
+	entries, err := os.ReadDir(target.Home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected only the link to remain, found %d entries", len(entries))
+	}
+}
+
+// Renaming a whole directory aside and calling it a backed-up settings
+// document would describe the wrong thing to the user.
+func TestShareSettingsRefusesADirectoryWhereTheDocumentBelongs(t *testing.T) {
+	source, target := homes(t, "claude", `{"a":1}`)
+	targetPath := SettingsPath(target)
+	if err := os.MkdirAll(filepath.Join(targetPath, "inside"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	share, err := ShareSettings(source, target, true)
+	if err == nil {
+		t.Fatal("expected sharing to refuse a directory")
+	}
+	if share.Before != SettingsDirectory {
+		t.Fatalf("expected the directory to be classified as such, got %v", share.Before)
+	}
+	if _, err := os.Stat(filepath.Join(targetPath, "inside")); err != nil {
+		t.Fatalf("the directory was moved aside: %v", err)
 	}
 }
