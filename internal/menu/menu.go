@@ -609,7 +609,7 @@ func shareAllAccountSettings(r registry.Registry) {
 	}
 	switch {
 	case candidates == 0:
-		fmt.Println("每個 provider 都只有一個帳號，沒有可以共用的對象。")
+		fmt.Println("沒有可以共用設定的對象。")
 	case !reported:
 		fmt.Println("所有帳號都已經在共用設定了。")
 	}

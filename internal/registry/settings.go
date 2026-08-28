@@ -89,15 +89,19 @@ func ShareSettings(source, target Account, replace bool) (SettingsShare, error) 
 		return SettingsShare{}, fmt.Errorf("provider has no known settings file: %s", target.Provider)
 	}
 	// Compare the homes and not just the ids: two registry entries can
-	// name one physical directory through a symlink, and linking a
-	// document to itself destroys it while looking like success.
+	// name one physical directory, and linking a document to itself
+	// destroys it while looking like success.
 	if source.ID == target.ID || sameFile(source.Home, target.Home) {
 		return SettingsShare{}, fmt.Errorf("%s and %s are the same account home", source.ID, target.ID)
 	}
 	// A symlink to a file that is not there yet would silently become a
 	// broken link, so require the source document to exist.
-	if _, err := os.Stat(sourcePath); err != nil {
+	sourceInfo, err := os.Stat(sourcePath)
+	if err != nil {
 		return SettingsShare{}, fmt.Errorf("%s has no settings document to share: %w", source.ID, err)
+	}
+	if sourceInfo.IsDir() {
+		return SettingsShare{}, fmt.Errorf("%s has a directory where its settings document belongs", source.ID)
 	}
 
 	state, err := settingsState(sourcePath, targetPath)
@@ -117,6 +121,13 @@ func ShareSettings(source, target Account, replace bool) (SettingsShare, error) 
 		if !replace {
 			return share, fmt.Errorf("%s keeps its own settings document", target.ID)
 		}
+		// A plain file at the target that is already the source file --
+		// two homes on one directory, a hard link, a source document
+		// symlinked onto this one -- would be moved aside and then
+		// replaced by a link to itself, destroying the only copy.
+		if sameFile(sourcePath, targetPath) {
+			return share, fmt.Errorf("%s and %s are already one settings document", source.ID, target.ID)
+		}
 	}
 
 	if err := os.MkdirAll(filepath.Dir(targetPath), 0o755); err != nil {
@@ -130,6 +141,9 @@ func ShareSettings(source, target Account, replace bool) (SettingsShare, error) 
 			return share, err
 		}
 		if err := os.Rename(targetPath, backup); err != nil {
+			// The name was claimed by creating it; an empty file left
+			// beside the settings would only confuse the next run.
+			os.Remove(backup)
 			return share, err
 		}
 		share.Backup = backup
@@ -149,18 +163,22 @@ func ShareSettings(source, target Account, replace bool) (SettingsShare, error) 
 	return share, nil
 }
 
-// freeBackupPath picks a .bak name nothing occupies. The timestamp has
-// second resolution and os.Rename overwrites silently, so two shares within
-// one second would otherwise destroy the backup made moments earlier.
+// freeBackupPath claims a .bak name. The timestamp has second resolution
+// and os.Rename overwrites silently, so two shares within one second would
+// otherwise destroy the backup made moments earlier. The name is claimed by
+// creating it O_EXCL rather than by testing and then using it, so a second
+// process racing for the same name loses instead of tying; the rename that
+// follows replaces the empty placeholder.
 func freeBackupPath(path string) (string, error) {
 	stamp := time.Now().Format("20060102-150405")
 	candidate := fmt.Sprintf("%s.bak-%s", path, stamp)
 	for attempt := 2; attempt < 100; attempt++ {
-		_, err := os.Lstat(candidate)
-		if os.IsNotExist(err) {
+		claim, err := os.OpenFile(candidate, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+		if err == nil {
+			claim.Close()
 			return candidate, nil
 		}
-		if err != nil {
+		if !os.IsExist(err) {
 			return "", err
 		}
 		candidate = fmt.Sprintf("%s.bak-%s-%d", path, stamp, attempt)
@@ -199,16 +217,21 @@ func settingsState(sourcePath, targetPath string) (SettingsState, error) {
 	return SettingsForeign, nil
 }
 
-// sameFile compares two paths through any further symlinks, so a file or
-// home reached by a different route is not reported as a different one.
+// sameFile asks the filesystem whether two paths are one file, rather than
+// comparing the strings. Path comparison misses every route that does not
+// change the spelling: a case-insensitive volume, a macOS firmlink, a hard
+// link. Getting this wrong is not a missed optimisation -- the caller
+// renames one path and symlinks the other, so two spellings of one file
+// means destroying it.
+//
 // It fails to false, which callers turn into a refusal rather than a write.
 func sameFile(a, b string) bool {
 	if filepath.Clean(a) == filepath.Clean(b) {
 		return true
 	}
-	resolvedA, errA := filepath.EvalSymlinks(a)
-	resolvedB, errB := filepath.EvalSymlinks(b)
-	return errA == nil && errB == nil && resolvedA == resolvedB
+	infoA, errA := os.Stat(a)
+	infoB, errB := os.Stat(b)
+	return errA == nil && errB == nil && os.SameFile(infoA, infoB)
 }
 
 func sameContent(a, b string) bool {
