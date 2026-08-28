@@ -176,39 +176,11 @@ func Save(path string, r Registry) error {
 	if problem := SchemaProblem(r); problem != "" {
 		return fmt.Errorf("refusing to write invalid account registry: %s", problem)
 	}
-	dir := filepath.Dir(path)
-	if err := os.MkdirAll(dir, 0o755); err != nil {
-		return err
-	}
 	data, err := json.MarshalIndent(r, "", "  ")
 	if err != nil {
 		return err
 	}
-	data = append(data, '\n')
-	temp, err := os.CreateTemp(dir, "."+filepath.Base(path)+".*.tmp")
-	if err != nil {
-		return err
-	}
-	tempName := temp.Name()
-	if _, err := temp.Write(data); err != nil {
-		temp.Close()
-		os.Remove(tempName)
-		return err
-	}
-	if err := temp.Sync(); err != nil {
-		temp.Close()
-		os.Remove(tempName)
-		return err
-	}
-	if err := temp.Close(); err != nil {
-		os.Remove(tempName)
-		return err
-	}
-	if err := os.Rename(tempName, path); err != nil {
-		os.Remove(tempName)
-		return err
-	}
-	return nil
+	return writeFileAtomic(path, append(data, '\n'), 0o600)
 }
 
 // WithLock runs fn while holding an exclusive flock on path+".lock",

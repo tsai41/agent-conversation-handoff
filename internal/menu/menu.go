@@ -1,9 +1,10 @@
 // Package menu drives the interactive fzf-based flows: the top-level
-// account/action picker, account settings, and the handoff wizard.
+// function picker, account settings, and the handoff wizard.
 package menu
 
 import (
 	"bufio"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -19,11 +20,51 @@ import (
 
 type kv struct{ Key, Label string }
 
+// errCancelled marks a picker the user backed out of (ESC / CTRL-C) rather
+// than one that failed. It propagates uncaught to Run, which restarts at
+// the function level; only Run's own picker treats it as quitting.
+var errCancelled = errors.New("selection cancelled")
+
+// Breadcrumb segments for the levels below the root. Each level is named
+// once here so the path bar cannot drift from the menu row leading to it.
+const (
+	rootCrumb     = "主選單"
+	crumbChat     = "使用帳號對話"
+	crumbHandoff  = "接手對話"
+	crumbAccounts = "帳號設定"
+	crumbSetup    = "初次設定"
+)
+
+// breadcrumb renders the path bar shown above every picker, so which level
+// a keypress is answering is never ambiguous.
+func breadcrumb(segments ...string) string {
+	return strings.Join(append([]string{rootCrumb}, segments...), " > ")
+}
+
+// showCrumbs prints the path bar above a plain-text prompt; fzf's --header
+// does the same job for the pickers.
+func showCrumbs(crumbs string) {
+	if crumbs != "" {
+		fmt.Println(crumbs)
+	}
+}
+
+// labelOf is how a chosen row becomes the next breadcrumb segment: the
+// label the user just read is the name of the level they are entering.
+func labelOf(candidates []kv, key string) string {
+	for _, c := range candidates {
+		if c.Key == key {
+			return c.Label
+		}
+	}
+	return key
+}
+
 // pickKey runs fzf over candidates ("key\tlabel" rows, label-only visible)
 // and returns the chosen key. When numbered is true, candidates are
 // prefixed "1. ", "2. ", ... and fzf is given digit-key shortcuts
 // (pos(N)+accept) so a single keypress selects and accepts, up to 9 items.
-func pickKey(candidates []kv, prompt string, numbered bool) (string, error) {
+func pickKey(candidates []kv, crumbs, prompt string, numbered bool) (string, error) {
 	if _, err := exec.LookPath("fzf"); err != nil {
 		return "", fmt.Errorf("fzf is required")
 	}
@@ -42,6 +83,9 @@ func pickKey(candidates []kv, prompt string, numbered bool) (string, error) {
 		rows.WriteByte('\n')
 	}
 	args := []string{"--height=~15", "--border=none", "--with-nth=2..", "--delimiter=\t", "--prompt=" + prompt}
+	if crumbs != "" {
+		args = append(args, "--header="+crumbs)
+	}
 	if numbered {
 		shortcuts := len(candidates)
 		if shortcuts > 9 {
@@ -57,18 +101,24 @@ func pickKey(candidates []kv, prompt string, numbered bool) (string, error) {
 	cmd.Stdin = strings.NewReader(rows.String())
 	out, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("selection cancelled")
+		return "", errCancelled
 	}
 	selected := strings.SplitN(strings.TrimSpace(string(out)), "\t", 2)[0]
 	if selected == "" {
-		return "", fmt.Errorf("nothing selected")
+		return "", errCancelled
 	}
 	return selected, nil
 }
 
-func pickSession(candidates []session.Candidate, prompt string) (string, error) {
+// pickSession runs fzf over conversation rows and returns the chosen path
+// alongside whatever was typed into the search box. fzf gets --print-query
+// so a conversation id typed there is usable even when it matches no listed
+// row: the picker lists only the current project's newest conversations, so
+// an id the user already knows is regularly absent from it. Such an id
+// comes back as the query, with an empty path.
+func pickSession(candidates []session.Candidate, crumbs, prompt string) (string, string, error) {
 	if _, err := exec.LookPath("fzf"); err != nil {
-		return "", fmt.Errorf("fzf is required")
+		return "", "", fmt.Errorf("fzf is required")
 	}
 	var rows strings.Builder
 	for _, c := range candidates {
@@ -77,17 +127,47 @@ func pickSession(candidates []session.Candidate, prompt string) (string, error) 
 		rows.WriteString(c.Description)
 		rows.WriteByte('\n')
 	}
-	cmd := exec.Command("fzf", "--height=~15", "--border=none", "--with-nth=2..", "--delimiter=\t", "--prompt="+prompt)
+	args := []string{"--height=~15", "--border=none", "--with-nth=2..", "--delimiter=\t", "--print-query", "--prompt=" + prompt}
+	if crumbs != "" {
+		args = append(args, "--header="+crumbs)
+	}
+	cmd := exec.Command("fzf", args...)
 	cmd.Stdin = strings.NewReader(rows.String())
 	out, err := cmd.Output()
 	if err != nil {
-		return "", fmt.Errorf("conversation selection cancelled")
+		// Exit code 1 is "no match", which is the whole point of
+		// --print-query here: the query is still on stdout and is the id
+		// the user typed. Anything else (130 for ESC, 2 for a real
+		// failure) is a cancellation.
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
+			return "", "", errCancelled
+		}
 	}
-	selected := strings.SplitN(strings.TrimSpace(string(out)), "\t", 2)[0]
-	if selected == "" {
+	lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
+	query := strings.TrimSpace(lines[0])
+	selected := ""
+	if len(lines) > 1 {
+		selected = strings.SplitN(strings.TrimSpace(lines[1]), "\t", 2)[0]
+	}
+	if selected == "" && query == "" {
+		return "", "", errCancelled
+	}
+	return selected, query, nil
+}
+
+// pickSessionRow is pickSession for the pickers where only a listed row
+// means anything -- disambiguating an id that already matched several
+// conversations, where whatever was typed is not another id to go look up.
+func pickSessionRow(candidates []session.Candidate, crumbs, prompt string) (string, error) {
+	path, _, err := pickSession(candidates, crumbs, prompt)
+	if err != nil {
+		return "", err
+	}
+	if path == "" {
 		return "", fmt.Errorf("no conversation selected")
 	}
-	return selected, nil
+	return path, nil
 }
 
 // stdinReader is shared: a fresh bufio.Reader per prompt would keep
@@ -101,7 +181,8 @@ func readLine(prompt string) string {
 	return strings.TrimSpace(line)
 }
 
-func readOptionalAlias(prompt string) string {
+func readOptionalAlias(crumbs, prompt string) string {
+	showCrumbs(crumbs)
 	if prompt == "" {
 		prompt = "alias（選填）: "
 	}
@@ -125,6 +206,14 @@ func sessionsForAccount(account registry.Account, project string) ([]session.Can
 		return session.ClaudeCandidates(account.Home, project)
 	}
 	return session.CodexCandidates(account.Home, project)
+}
+
+func accountLabels(r registry.Registry) map[string]string {
+	labels := map[string]string{}
+	for _, row := range registry.Rows(r) {
+		labels[row.ID] = row.Label
+	}
+	return labels
 }
 
 // RegistryHandoff verifies source != target and target is authenticated,
@@ -168,70 +257,76 @@ func RegistryHandoff(registryPath, sourceID, targetID, sessionPath, project stri
 }
 
 // manualIDRow is the sentinel path returned by pickSession when the user
-// chooses to type an id instead of picking a listed conversation. The
-// picker only ever lists real conversations for the current project, and
-// only the five newest of those, so a conversation the user knows the id of
-// is regularly absent from it -- the row exists so that is not a dead end.
+// picks the row that teaches the shortcut instead of using it. Typing an id
+// straight into the search box reaches the same place without the extra
+// keypress; the row is what makes that discoverable.
 const manualIDRow = "action:manual-id"
+
+const manualIDLabel = "✎ 輸入對話 ID（也可直接在上面的搜尋框輸入）"
+
+// chooseSourceAccount is the second level of the handoff flow. Every
+// registered account is offered whether or not its CLI is installed:
+// handing a conversation off only reads the source account's files, and an
+// id typed at the next level can turn out to belong to any account anyway.
+func chooseSourceAccount(r registry.Registry, labels map[string]string) (string, error) {
+	ids := make([]string, 0, len(r.Accounts))
+	for _, account := range r.Accounts {
+		ids = append(ids, account.ID)
+	}
+	sort.Strings(ids)
+	candidates := make([]kv, 0, len(ids))
+	for _, id := range ids {
+		candidates = append(candidates, kv{id, labels[id]})
+	}
+	if len(candidates) == 0 {
+		return "", fmt.Errorf("no account is registered")
+	}
+	return pickKey(candidates, breadcrumb(crumbHandoff), "來源帳號: ", true)
+}
 
 func interactiveRegistryHandoff(registryPath, project string) error {
 	r, err := registry.Load(registryPath)
 	if err != nil {
 		return err
 	}
-	labels := map[string]string{}
-	for _, row := range registry.Rows(r) {
-		labels[row.ID] = row.Label
-	}
+	labels := accountLabels(r)
 
-	sessionsByAccount := map[string][]session.Candidate{}
-	for _, account := range r.Accounts {
-		sessions, err := sessionsForAccount(account, project)
-		if err != nil {
-			continue
-		}
-		sessionsByAccount[account.ID] = sessions
-	}
-
-	sourceIDs := make([]string, 0, len(r.Accounts))
-	for _, account := range r.Accounts {
-		sourceIDs = append(sourceIDs, account.ID)
-	}
-	sort.Strings(sourceIDs)
-
-	var directions []kv
-	for _, sourceID := range sourceIDs {
-		for _, account := range r.Accounts {
-			targetID := account.ID
-			if targetID == sourceID || !cliInstalled(account) {
-				continue
-			}
-			directions = append(directions, kv{
-				sourceID + "|" + targetID,
-				fmt.Sprintf("「%s」→「%s」", labels[sourceID], labels[targetID]),
-			})
-		}
-	}
-	if len(directions) == 0 {
-		return fmt.Errorf("no different target account is available")
-	}
-	chosen, err := pickKey(directions, "接力方向: ", false)
+	sourceID, err := chooseSourceAccount(r, labels)
 	if err != nil {
 		return err
 	}
-	parts := strings.SplitN(chosen, "|", 2)
-	sourceID, targetID := parts[0], parts[1]
+	source, err := registry.FindAccount(r, sourceID)
+	if err != nil {
+		return err
+	}
 
-	sourceSessions := sessionsByAccount[sourceID]
-	candidates := make([]session.Candidate, 0, len(sourceSessions)+1)
-	candidates = append(candidates, sourceSessions...)
-	candidates = append(candidates, session.Candidate{Path: manualIDRow, Description: "✎ 手動輸入對話 ID"})
-	sessionPath, err := pickSession(candidates, fmt.Sprintf("選擇「%s」要接力的對話: ", labels[sourceID]))
+	// A source account whose conversations cannot be listed is not a dead
+	// end: the id row below still reaches every account.
+	sessions, err := sessionsForAccount(source, project)
+	if err != nil {
+		sessions = nil
+	}
+	candidates := make([]session.Candidate, 0, len(sessions)+1)
+	candidates = append(candidates, sessions...)
+	candidates = append(candidates, session.Candidate{Path: manualIDRow, Description: manualIDLabel})
+
+	crumbs := breadcrumb(crumbHandoff, labels[sourceID])
+	sessionPath, typed, err := pickSession(candidates, crumbs, "選擇對話，或直接輸入 ID: ")
 	if err != nil {
 		return err
 	}
 	if sessionPath == manualIDRow {
-		return manualIDHandoff(registryPath, r, labels, targetID, project)
+		showCrumbs(crumbs)
+		typed = readLine("對話 ID（可只輸入前綴）: ")
+		sessionPath = ""
+	}
+	if sessionPath == "" {
+		return manualIDHandoff(registryPath, r, labels, typed, project)
+	}
+
+	targetID, err := chooseTargetExcluding(r, labels, sourceID, crumbs)
+	if err != nil {
+		return err
 	}
 	return RegistryHandoff(registryPath, sourceID, targetID, sessionPath, project, true)
 }
@@ -244,10 +339,7 @@ func QuickHandoff(registryPath, fragment, project string) error {
 	if err != nil {
 		return err
 	}
-	labels := map[string]string{}
-	for _, row := range registry.Rows(r) {
-		labels[row.ID] = row.Label
-	}
+	labels := accountLabels(r)
 
 	targetID, err := chooseCodexTarget(r, labels)
 	if err != nil {
@@ -286,7 +378,7 @@ func QuickHandoff(registryPath, fragment, project string) error {
 			}
 			byPath[h.match.Path] = h
 		}
-		path, pickErr := pickSession(candidates, "多筆符合，選擇要接力的對話: ")
+		path, pickErr := pickSessionRow(candidates, breadcrumb(crumbHandoff), "多筆符合，選擇要接力的對話: ")
 		if pickErr != nil {
 			return pickErr
 		}
@@ -309,14 +401,13 @@ func chooseCodexTarget(r registry.Registry, labels map[string]string) (string, e
 	if len(candidates) == 1 {
 		return candidates[0].Key, nil
 	}
-	return pickKey(candidates, "選擇接手的 Codex 帳號: ", false)
+	return pickKey(candidates, breadcrumb(crumbHandoff), "選擇接手的 Codex 帳號: ", true)
 }
 
 // manualIDHandoff resolves a conversation id typed by the user against every
 // registered account, so the source account comes from wherever the id was
-// actually found rather than from the direction picked beforehand.
-func manualIDHandoff(registryPath string, r registry.Registry, labels map[string]string, targetID, project string) error {
-	fragment := readLine("對話 ID（可只輸入前綴）: ")
+// actually found rather than from the source account picked beforehand.
+func manualIDHandoff(registryPath string, r registry.Registry, labels map[string]string, fragment, project string) error {
 	if fragment == "" {
 		return fmt.Errorf("no conversation id entered")
 	}
@@ -362,7 +453,7 @@ func manualIDHandoff(registryPath string, r registry.Registry, labels map[string
 			candidates[i] = session.Candidate{Path: h.match.Path, Description: fmt.Sprintf("%s  %s  %s", labels[h.accountID], h.match.Description, h.match.CWD)}
 			byPath[h.match.Path] = h
 		}
-		path, err := pickSession(candidates, "多筆符合，選擇要接力的對話: ")
+		path, err := pickSessionRow(candidates, breadcrumb(crumbHandoff), "多筆符合，選擇要接力的對話: ")
 		if err != nil {
 			return err
 		}
@@ -370,12 +461,9 @@ func manualIDHandoff(registryPath string, r registry.Registry, labels map[string
 	}
 
 	sourceID := chosen.accountID
-	if sourceID == targetID {
-		replacement, err := chooseTargetExcluding(r, labels, sourceID)
-		if err != nil {
-			return err
-		}
-		targetID = replacement
+	targetID, err := chooseTargetExcluding(r, labels, sourceID, breadcrumb(crumbHandoff, labels[sourceID]))
+	if err != nil {
+		return err
 	}
 	return finishManualHandoff(registryPath, sourceID, targetID, labels, chosen.match, project)
 }
@@ -404,7 +492,7 @@ func resolvePath(path string) string {
 	return path
 }
 
-func chooseTargetExcluding(r registry.Registry, labels map[string]string, sourceID string) (string, error) {
+func chooseTargetExcluding(r registry.Registry, labels map[string]string, sourceID, crumbs string) (string, error) {
 	var candidates []kv
 	for _, account := range r.Accounts {
 		if account.ID == sourceID || !cliInstalled(account) {
@@ -415,7 +503,7 @@ func chooseTargetExcluding(r registry.Registry, labels map[string]string, source
 	if len(candidates) == 0 {
 		return "", fmt.Errorf("no different target account is available")
 	}
-	return pickKey(candidates, "這個對話屬於原本選定的目標帳號，改選接手帳號: ", false)
+	return pickKey(candidates, crumbs, "接手帳號: ", true)
 }
 
 func bootstrapRegistry(registryPath string) error {
@@ -423,18 +511,19 @@ func bootstrapRegistry(registryPath string) error {
 	if err != nil {
 		return err
 	}
+	crumbs := breadcrumb(crumbSetup)
 	r := registry.Empty()
 	for _, candidate := range candidates {
 		providerName := registry.ProviderNames[candidate.Provider]
 		choice, err := pickKey([]kv{
 			{"import", fmt.Sprintf("匯入 %s: %s", providerName, candidate.Home)},
 			{"skip", "略過這個目錄"},
-		}, "偵測到既有帳號目錄: ", false)
+		}, crumbs, "偵測到既有帳號目錄: ", true)
 		if err != nil {
 			return err
 		}
 		if choice == "import" {
-			alias := readOptionalAlias(fmt.Sprintf("%s alias（選填）: ", providerName))
+			alias := readOptionalAlias(crumbs, fmt.Sprintf("%s alias（選填）: ", providerName))
 			if _, err := registry.Register(&r, candidate.Provider, candidate.Home, alias, false); err != nil {
 				return err
 			}
@@ -451,31 +540,58 @@ func bootstrapRegistry(registryPath string) error {
 	return nil
 }
 
-func chooseRegisteredAccount(r registry.Registry, prompt string) (string, error) {
-	labels := map[string]string{}
-	for _, row := range registry.Rows(r) {
-		labels[row.ID] = row.Label
-	}
+func chooseRegisteredAccount(r registry.Registry, crumbs, prompt string) (string, error) {
+	labels := accountLabels(r)
 	candidates := make([]kv, 0, len(r.Accounts))
 	for _, account := range r.Accounts {
 		candidates = append(candidates, kv{account.ID, labels[account.ID]})
 	}
-	return pickKey(candidates, prompt, false)
+	return pickKey(candidates, crumbs, prompt, true)
+}
+
+// seededKeys are the settings a brand-new account inherits from the first
+// account of the same provider. A freshly created account home is an empty
+// directory, so without this a new Claude account starts with no status
+// line while every account beside it has one.
+var seededKeys = []string{"statusLine"}
+
+// seedAccountDefaults is best-effort by design: an account that inherited
+// nothing is still a working account, so a failure here is reported and
+// stepped over rather than blocking the login that follows.
+func seedAccountDefaults(r registry.Registry, account registry.Account) {
+	source, found := registry.PrimaryAccount(r, account.Provider)
+	if !found || source.ID == account.ID {
+		return
+	}
+	labels := accountLabels(r)
+	for _, key := range seededKeys {
+		copied, err := registry.CopySettingsKey(source.Home, account.Home, key)
+		if err != nil {
+			fmt.Printf("提醒: 無法從「%s」帶入 %s 設定: %s\n", labels[source.ID], key, err)
+			continue
+		}
+		if copied {
+			fmt.Printf("已從「%s」帶入 %s 設定。\n", labels[source.ID], key)
+		}
+	}
 }
 
 func manageAccounts(registryPath string) error {
+	crumbs := breadcrumb(crumbAccounts)
 	for {
-		action, err := pickKey([]kv{
+		actions := []kv{
 			{"add", "新增帳號"},
 			{"rename", "修改 alias"},
 			{"login", "登入／重新登入"},
 			{"remove", "從 ccs 移除帳號"},
 			{"import", "匯入既有帳號目錄"},
 			{"back", "返回主選單"},
-		}, "帳號設定: ", false)
+		}
+		action, err := pickKey(actions, crumbs, "選擇動作: ", true)
 		if err != nil {
 			return err
 		}
+		actionCrumbs := breadcrumb(crumbAccounts, labelOf(actions, action))
 		switch action {
 		case "back":
 			return nil
@@ -489,7 +605,7 @@ func manageAccounts(registryPath string) error {
 			if len(providers) == 0 {
 				return fmt.Errorf("no provider CLI is installed")
 			}
-			chosenProvider, err := pickKey(providers, "選擇 provider: ", false)
+			chosenProvider, err := pickKey(providers, actionCrumbs, "選擇 provider: ", true)
 			if err != nil {
 				return err
 			}
@@ -500,15 +616,21 @@ func manageAccounts(registryPath string) error {
 			confirmation, err := pickKey([]kv{
 				{"confirm", fmt.Sprintf("建立帳號目錄: %s", accountHome)},
 				{"cancel", "取消"},
-			}, "確認新增帳號: ", false)
+			}, actionCrumbs, "確認新增帳號: ", true)
 			if err != nil {
 				return err
 			}
 			if confirmation == "confirm" {
-				alias := readOptionalAlias("")
+				alias := readOptionalAlias(actionCrumbs, "")
 				account, err := registry.AddAccount(registryPath, chosenProvider, accountHome, alias)
 				if err != nil {
 					return err
+				}
+				// Seeding reads the registry the account was just added
+				// to, so it has to be reloaded rather than reusing the
+				// copy this loop started with.
+				if updated, loadErr := registry.Load(registryPath); loadErr == nil {
+					seedAccountDefaults(updated, account)
 				}
 				return provider.Login(account)
 			}
@@ -517,11 +639,11 @@ func manageAccounts(registryPath string) error {
 			if err != nil {
 				return err
 			}
-			accountID, err := chooseRegisteredAccount(r, "選擇要修改 alias 的帳號: ")
+			accountID, err := chooseRegisteredAccount(r, actionCrumbs, "選擇要修改 alias 的帳號: ")
 			if err != nil {
 				return err
 			}
-			alias := readOptionalAlias("新的 alias（留空即清除）: ")
+			alias := readOptionalAlias(actionCrumbs, "新的 alias（留空即清除）: ")
 			if err := registry.RenameAccount(registryPath, accountID, alias); err != nil {
 				return err
 			}
@@ -530,7 +652,7 @@ func manageAccounts(registryPath string) error {
 			if err != nil {
 				return err
 			}
-			accountID, err := chooseRegisteredAccount(r, "選擇要登入的帳號: ")
+			accountID, err := chooseRegisteredAccount(r, actionCrumbs, "選擇要登入的帳號: ")
 			if err != nil {
 				return err
 			}
@@ -552,12 +674,12 @@ func manageAccounts(registryPath string) error {
 			for i, c := range candidates {
 				options[i] = kv{c.Provider + "|" + c.Home, fmt.Sprintf("%s: %s", registry.ProviderNames[c.Provider], c.Home)}
 			}
-			selected, err := pickKey(options, "選擇要匯入的帳號目錄: ", false)
+			selected, err := pickKey(options, actionCrumbs, "選擇要匯入的帳號目錄: ", true)
 			if err != nil {
 				return err
 			}
 			parts := strings.SplitN(selected, "|", 2)
-			alias := readOptionalAlias("")
+			alias := readOptionalAlias(actionCrumbs, "")
 			if _, err := registry.AddAccount(registryPath, parts[0], parts[1], alias); err != nil {
 				return err
 			}
@@ -566,14 +688,14 @@ func manageAccounts(registryPath string) error {
 			if err != nil {
 				return err
 			}
-			accountID, err := chooseRegisteredAccount(r, "選擇要取消登記的帳號: ")
+			accountID, err := chooseRegisteredAccount(r, actionCrumbs, "選擇要取消登記的帳號: ")
 			if err != nil {
 				return err
 			}
 			confirmation, err := pickKey([]kv{
 				{"confirm", "只從 ccs 移除，保留所有帳號資料"},
 				{"cancel", "取消"},
-			}, "確認取消登記: ", false)
+			}, actionCrumbs, "確認取消登記: ", true)
 			if err != nil {
 				return err
 			}
@@ -586,8 +708,39 @@ func manageAccounts(registryPath string) error {
 	}
 }
 
+// launchAccount is the second level of the chat flow. provider.LaunchSession
+// execs, so this only returns when the account could not be launched or the
+// user backed out.
+func launchAccount(registryPath string) error {
+	r, err := registry.Load(registryPath)
+	if err != nil {
+		return err
+	}
+	labels := accountLabels(r)
+	var candidates []kv
+	for _, account := range r.Accounts {
+		if cliInstalled(account) {
+			candidates = append(candidates, kv{account.ID, labels[account.ID]})
+		}
+	}
+	if len(candidates) == 0 {
+		return fmt.Errorf("no registered account has its provider CLI installed")
+	}
+	selected, err := pickKey(candidates, breadcrumb(crumbChat), "選擇帳號: ", true)
+	if err != nil {
+		return err
+	}
+	account, err := registry.FindAccount(r, selected)
+	if err != nil {
+		return err
+	}
+	return provider.LaunchSession(account)
+}
+
 // Run drives the top-level menu loop until an account is launched (which
-// execs and never returns) or the handoff/accounts flow returns.
+// execs and never returns) or the handoff flow returns. Backing out of a
+// second-level picker lands back here rather than quitting, so a wrong turn
+// costs one ESC instead of a restart.
 func Run(registryPath string) error {
 	if _, err := os.Stat(registryPath); os.IsNotExist(err) {
 		if err := bootstrapRegistry(registryPath); err != nil {
@@ -595,43 +748,42 @@ func Run(registryPath string) error {
 		}
 	}
 	for {
-		r, err := registry.Load(registryPath)
+		action, err := pickKey([]kv{
+			{"chat", crumbChat},
+			{"handoff", crumbHandoff},
+			{"accounts", crumbAccounts},
+		}, breadcrumb(), "選擇功能: ", true)
 		if err != nil {
 			return err
 		}
-		labels := map[string]string{}
-		for _, row := range registry.Rows(r) {
-			labels[row.ID] = row.Label
-		}
-		var candidates []kv
-		for _, account := range r.Accounts {
-			if cliInstalled(account) {
-				candidates = append(candidates, kv{account.ID, labels[account.ID]})
+		switch action {
+		case "chat":
+			if err := launchAccount(registryPath); err != nil {
+				if errors.Is(err, errCancelled) {
+					continue
+				}
+				return err
 			}
-		}
-		candidates = append(candidates, kv{"action:handoff", "接手既有對話"}, kv{"action:accounts", "帳號設定"})
-		selected, err := pickKey(candidates, "選擇帳號或功能: ", true)
-		if err != nil {
-			return err
-		}
-		switch selected {
-		case "action:handoff":
+			return nil
+		case "handoff":
 			cwd, err := os.Getwd()
 			if err != nil {
 				return err
 			}
-			return interactiveRegistryHandoff(registryPath, cwd)
-		case "action:accounts":
+			if err := interactiveRegistryHandoff(registryPath, cwd); err != nil {
+				if errors.Is(err, errCancelled) {
+					continue
+				}
+				return err
+			}
+			return nil
+		case "accounts":
 			if err := manageAccounts(registryPath); err != nil {
+				if errors.Is(err, errCancelled) {
+					continue
+				}
 				return err
 			}
-			continue
-		default:
-			account, err := registry.FindAccount(r, selected)
-			if err != nil {
-				return err
-			}
-			return provider.LaunchSession(account)
 		}
 	}
 }

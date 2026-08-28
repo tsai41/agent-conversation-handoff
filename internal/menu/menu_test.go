@@ -31,17 +31,60 @@ func runWithFakePath(t *testing.T, home string) string {
 	return fakeBin
 }
 
-func TestRunOffersNumberedShortcutsAndRestoresRealStdin(t *testing.T) {
-	home := t.TempDir()
-	fakeBin := runWithFakePath(t, home)
+// reply is one canned fzf invocation: what it prints and what it exits
+// with. Exit code 1 with only a query line is how fzf reports "nothing in
+// the list matched what was typed", which the session picker treats as a
+// conversation id rather than as a failure.
+type reply struct {
+	stdout   string
+	exitCode int
+}
 
-	claudeHome := filepath.Join(home, ".claude")
-	codexHome := filepath.Join(home, ".codex")
-	os.MkdirAll(claudeHome, 0o755)
-	os.MkdirAll(codexHome, 0o755)
+func row(path string) reply { return reply{"\n" + path + "\n", 0} }
 
-	registryPath := filepath.Join(home, "accounts.json")
-	registryJSON := fmt.Sprintf(`{
+func typed(query string) reply { return reply{query + "\n", 1} }
+
+func key(k string) reply { return reply{k + "\n", 0} }
+
+// fakeFzf installs a stub fzf that replays one canned answer per call and
+// records the rows and argv of every call, so a whole menu path can be
+// driven and then inspected level by level.
+func fakeFzf(t *testing.T, home string, replies ...reply) string {
+	t.Helper()
+	calls := filepath.Join(home, "fzf-calls")
+	if err := os.MkdirAll(calls, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var cases strings.Builder
+	for i, r := range replies {
+		cases.WriteString(fmt.Sprintf("  %d) printf '%%s' '%s'; exit %d ;;\n",
+			i, strings.ReplaceAll(r.stdout, "'", `'\''`), r.exitCode))
+	}
+	writeScript(t, filepath.Join(home, "bin", "fzf"), fmt.Sprintf(`#!/usr/bin/env bash
+state=%q
+n=$(cat "$state" 2>/dev/null || echo 0)
+echo $((n+1)) > "$state"
+cat > %q/rows-$n
+printf '%%s\n' "$@" > %q/argv-$n
+case $n in
+%s  *) exit 130 ;;
+esac
+`, filepath.Join(home, "fzf-state"), calls, calls, cases.String()))
+	return calls
+}
+
+func callFile(t *testing.T, calls, name string) string {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join(calls, name))
+	if err != nil {
+		t.Fatalf("expected fzf call %s: %v", name, err)
+	}
+	return string(raw)
+}
+
+func writeRegistry(t *testing.T, path, claudeHome, codexHome string) {
+	t.Helper()
+	content := fmt.Sprintf(`{
 		"version": 1,
 		"next_number": {"claude": 2, "codex": 2},
 		"accounts": [
@@ -49,45 +92,90 @@ func TestRunOffersNumberedShortcutsAndRestoresRealStdin(t *testing.T) {
 			{"id": "codex-1", "provider": "codex", "number": 1, "home": %q, "alias": ""}
 		]
 	}`, claudeHome, codexHome)
-	os.WriteFile(registryPath, []byte(registryJSON), 0o644)
-
-	rowsCapture := filepath.Join(home, "rows")
-	argvCapture := filepath.Join(home, "argv")
-	writeScript(t, filepath.Join(fakeBin, "fzf"), fmt.Sprintf(
-		"#!/usr/bin/env bash\ncat > %q\nprintf '%%s\\n' \"$@\" > %q\nprintf '%%s\\n' 'claude-1'\n",
-		rowsCapture, argvCapture,
-	))
-	stdinCapture := filepath.Join(home, "stdin-seen")
-	writeScript(t, filepath.Join(fakeBin, "claude"), fmt.Sprintf("#!/usr/bin/env bash\nhead -n1 > %q\n", stdinCapture))
-	writeScript(t, filepath.Join(fakeBin, "codex"), "#!/usr/bin/env bash\nexit 0\n")
-
-	// Run in a child process: menu.Run execs into "claude" and never
-	// returns on success, so it must be driven out-of-process here.
-	cmd := exec.Command(os.Args[0], "-test.run=TestHelperRunMenu")
-	cmd.Env = append(os.Environ(), "GO_WANT_HELPER_MENU_PROCESS=1", "ACH_TEST_REGISTRY="+registryPath)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	cmd.Stdin = strings.NewReader("real-stdin-marker\n")
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("menu run failed: %v\nstderr: %s", err, stderr.String())
-	}
-
-	argv, err := os.ReadFile(argvCapture)
-	if err != nil {
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(string(argv), "--bind=1:pos(1)+accept,2:pos(2)+accept,3:pos(3)+accept,4:pos(4)+accept") {
+}
+
+// runMenu drives menu.Run in a child process: it execs into the (faked)
+// provider CLI and never returns, so it cannot run in the test process.
+func runMenu(t *testing.T, registryPath, dir, stdin string) (string, string, error) {
+	t.Helper()
+	cmd := exec.Command(os.Args[0], "-test.run=TestHelperRunMenu")
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), "GO_WANT_HELPER_MENU_PROCESS=1", "ACH_TEST_REGISTRY="+registryPath)
+	cmd.Stdin = strings.NewReader(stdin)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	return stdout.String(), stderr.String(), err
+}
+
+// TestHelperRunMenu is not a real test; it is exec'd as a subprocess so
+// menu.Run's exec into the provider CLI doesn't replace the test binary.
+func TestHelperRunMenu(t *testing.T) {
+	if os.Getenv("GO_WANT_HELPER_MENU_PROCESS") != "1" {
+		return
+	}
+	if err := Run(os.Getenv("ACH_TEST_REGISTRY")); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
+func TestRunPicksAFunctionBeforeAnAccountAndRestoresRealStdin(t *testing.T) {
+	home := t.TempDir()
+	runWithFakePath(t, home)
+
+	claudeHome := filepath.Join(home, ".claude")
+	codexHome := filepath.Join(home, ".codex")
+	os.MkdirAll(claudeHome, 0o755)
+	os.MkdirAll(codexHome, 0o755)
+
+	registryPath := filepath.Join(home, "accounts.json")
+	writeRegistry(t, registryPath, claudeHome, codexHome)
+
+	calls := fakeFzf(t, home, key("chat"), key("claude-1"))
+	stdinCapture := filepath.Join(home, "stdin-seen")
+	writeScript(t, filepath.Join(home, "bin", "claude"), fmt.Sprintf("#!/usr/bin/env bash\nhead -n1 > %q\n", stdinCapture))
+	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
+
+	if _, stderr, err := runMenu(t, registryPath, home, "real-stdin-marker\n"); err != nil {
+		t.Fatalf("menu run failed: %v\nstderr: %s", err, stderr)
+	}
+
+	// Level one offers the three functions, not the accounts.
+	functions := callFile(t, calls, "rows-0")
+	for _, want := range []string{"1. 使用帳號對話", "2. 接手對話", "3. 帳號設定"} {
+		if !strings.Contains(functions, want) {
+			t.Fatalf("expected the function rows to contain %q, got: %s", want, functions)
+		}
+	}
+	if strings.Contains(functions, "Claude") || strings.Contains(functions, "Codex") {
+		t.Fatalf("accounts leaked into the function level: %s", functions)
+	}
+	argv := callFile(t, calls, "argv-0")
+	if !strings.Contains(argv, "--bind=1:pos(1)+accept,2:pos(2)+accept,3:pos(3)+accept") {
 		t.Fatalf("expected numbered bind flag, got argv: %s", argv)
 	}
-
-	rows, err := os.ReadFile(rowsCapture)
-	if err != nil {
-		t.Fatal(err)
+	if !strings.Contains(argv, "--header=主選單") {
+		t.Fatalf("expected the root path bar, got argv: %s", argv)
 	}
-	for _, want := range []string{"1. Claude", "2. Codex", "3. 接手既有對話", "4. 帳號設定"} {
-		if !strings.Contains(string(rows), want) {
-			t.Fatalf("expected rows to contain %q, got: %s", want, rows)
+
+	// Level two offers the accounts, under a path bar naming the function.
+	accounts := callFile(t, calls, "rows-1")
+	for _, want := range []string{"1. Claude", "2. Codex"} {
+		if !strings.Contains(accounts, want) {
+			t.Fatalf("expected the account rows to contain %q, got: %s", want, accounts)
 		}
+	}
+	accountArgv := callFile(t, calls, "argv-1")
+	if !strings.Contains(accountArgv, "--header=主選單 > 使用帳號對話") {
+		t.Fatalf("expected the second-level path bar, got argv: %s", accountArgv)
+	}
+	if !strings.Contains(accountArgv, "--bind=1:pos(1)+accept") {
+		t.Fatalf("expected the account level to be numbered too, got argv: %s", accountArgv)
 	}
 
 	seen, err := os.ReadFile(stdinCapture)
@@ -96,6 +184,160 @@ func TestRunOffersNumberedShortcutsAndRestoresRealStdin(t *testing.T) {
 	}
 	if string(seen) != "real-stdin-marker\n" {
 		t.Fatalf("expected claude to see real stdin, got %q", seen)
+	}
+}
+
+// The whole point of --print-query: an id typed into the search box is
+// used even though it matches nothing in the list. The picker only lists
+// the current project's conversations, and here the project has none --
+// the conversation was recorded elsewhere, under the other account.
+func TestHandoffUsesAnIDTypedIntoTheSearchBox(t *testing.T) {
+	home := t.TempDir()
+	runWithFakePath(t, home)
+
+	project := filepath.Join(home, "project")
+	os.MkdirAll(project, 0o755)
+	elsewhere := filepath.Join(home, "elsewhere")
+	os.MkdirAll(elsewhere, 0o755)
+	resolvedElsewhere, err := filepath.EvalSymlinks(elsewhere)
+	if err != nil {
+		t.Fatal(err)
+	}
+	claudeHome := filepath.Join(home, ".claude")
+	codexHome := filepath.Join(home, ".codex")
+	codexSessions := filepath.Join(codexHome, "sessions", "2026", "08", "04")
+	os.MkdirAll(claudeHome, 0o755)
+	os.MkdirAll(codexSessions, 0o755)
+
+	longUUID := "019fcb8e-b8cf-76b1-bc81-e444a74c4d60"
+	sessionPath := filepath.Join(codexSessions, "rollout-2026-08-04T14-55-56-"+longUUID+".jsonl")
+	os.WriteFile(sessionPath, []byte(fmt.Sprintf(
+		`{"type":"session_meta","payload":{"id":%q,"cwd":%q}}`+"\n"+
+			`{"type":"response_item","payload":{"role":"user","content":[{"type":"input_text","text":"carry this on"}]}}`+"\n",
+		longUUID, resolvedElsewhere)), 0o644)
+
+	registryPath := filepath.Join(home, "accounts.json")
+	writeRegistry(t, registryPath, claudeHome, codexHome)
+
+	// The source picked is claude-1, but the typed id belongs to codex-1,
+	// so the source flips and the target picker offers claude-1 instead.
+	calls := fakeFzf(t, home, key("handoff"), key("claude-1"), typed("019fcb8e"), key("claude-1"))
+
+	launched := filepath.Join(home, "launched")
+	writeScript(t, filepath.Join(home, "bin", "claude"), fmt.Sprintf(
+		"#!/usr/bin/env bash\nif [ \"$1 $2\" = 'auth status' ]; then exit 0; fi\nprintf '%%s|%%s' \"$CLAUDE_CONFIG_DIR\" \"$1\" > %q\n",
+		launched,
+	))
+	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
+
+	stdout, stderr, err := runMenu(t, registryPath, project, "")
+	if err != nil {
+		t.Fatalf("menu run failed: %v\nstderr: %s", err, stderr)
+	}
+
+	sessionArgv := callFile(t, calls, "argv-2")
+	if !strings.Contains(sessionArgv, "--print-query") {
+		t.Fatalf("expected the session picker to return its query, got argv: %s", sessionArgv)
+	}
+	if !strings.Contains(sessionArgv, "--header=主選單 > 接手對話 > Claude") {
+		t.Fatalf("expected a path bar naming the source account, got argv: %s", sessionArgv)
+	}
+	if rows := callFile(t, calls, "rows-2"); !strings.Contains(rows, "輸入對話 ID") {
+		t.Fatalf("expected the id row to still be offered, got: %s", rows)
+	}
+	if !strings.Contains(stdout, resolvedElsewhere) {
+		t.Fatalf("expected a warning naming the conversation's original project, got: %s", stdout)
+	}
+
+	launchedContent, err := os.ReadFile(launched)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(launchedContent), "transcript.md") {
+		t.Fatalf("expected the claude account to be launched at the new artifact, got %q", launchedContent)
+	}
+
+	var sourcePath string
+	filepath.Walk(filepath.Join(project, ".agent-handoffs"), func(path string, info os.FileInfo, err error) error {
+		if err == nil && filepath.Base(path) == "manifest.json" {
+			raw, _ := os.ReadFile(path)
+			var manifest map[string]any
+			json.Unmarshal(raw, &manifest)
+			source, _ := manifest["source"].(map[string]any)
+			sourcePath, _ = source["path"].(string)
+		}
+		return nil
+	})
+	if sourcePath == "" {
+		t.Fatal("expected a handoff artifact manifest.json to be created")
+	}
+	if filepath.Base(sourcePath) != filepath.Base(sessionPath) {
+		t.Fatalf("expected the artifact to snapshot the typed conversation, got %q", sourcePath)
+	}
+}
+
+func TestHandoffPicksSourceThenConversationThenTarget(t *testing.T) {
+	home := t.TempDir()
+	runWithFakePath(t, home)
+
+	project := filepath.Join(home, "project")
+	os.MkdirAll(project, 0o755)
+	claudeHome := filepath.Join(home, ".claude")
+	codexHome := filepath.Join(home, ".codex")
+	longUUID := "edcda8ee-19af-45ac-ad5d-206136874fdd"
+	// The subprocess resolves its cwd via os.Getwd(), which returns the
+	// symlink-resolved path (e.g. /private/var/... on macOS), so the
+	// session directory must be keyed off the same resolved path.
+	resolvedProject, err := filepath.EvalSymlinks(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionDir := filepath.Join(claudeHome, "projects", strings.NewReplacer("/", "-", "_", "-").Replace(resolvedProject))
+	os.MkdirAll(sessionDir, 0o755)
+	os.MkdirAll(codexHome, 0o755)
+	sessionPath := filepath.Join(sessionDir, "source.jsonl")
+	os.WriteFile(sessionPath, []byte(fmt.Sprintf(`{"type":"user","sessionId":%q,"message":{"content":"continue this"}}`+"\n", longUUID)), 0o644)
+
+	registryPath := filepath.Join(home, "accounts.json")
+	writeRegistry(t, registryPath, claudeHome, codexHome)
+
+	calls := fakeFzf(t, home, key("handoff"), key("claude-1"), row(sessionPath), key("codex-1"))
+
+	launched := filepath.Join(home, "launched")
+	writeScript(t, filepath.Join(home, "bin", "codex"), fmt.Sprintf(
+		"#!/usr/bin/env bash\nif [ \"$1 $2\" = 'login status' ]; then exit 0; fi\nprintf '%%s|%%s' \"$CODEX_HOME\" \"$1\" > %q\n",
+		launched,
+	))
+	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
+
+	if _, stderr, err := runMenu(t, registryPath, project, ""); err != nil {
+		t.Fatalf("menu run failed: %v\nstderr: %s", err, stderr)
+	}
+
+	if sources := callFile(t, calls, "rows-1"); !strings.Contains(sources, "1. Claude") {
+		t.Fatalf("expected a numbered source account level, got: %s", sources)
+	}
+	rows := callFile(t, calls, "rows-2")
+	if !strings.Contains(rows, "edcda8ee…4fdd") {
+		t.Fatalf("expected truncated session id in rows, got: %s", rows)
+	}
+	if strings.Contains(rows, longUUID) {
+		t.Fatalf("full uuid leaked into session rows: %s", rows)
+	}
+	if targetArgv := callFile(t, calls, "argv-3"); !strings.Contains(targetArgv, "--header=主選單 > 接手對話 > Claude") {
+		t.Fatalf("expected the target picker to keep the path bar, got argv: %s", targetArgv)
+	}
+
+	launchedContent, err := os.ReadFile(launched)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolvedCodexHome, _ := filepath.Abs(codexHome)
+	if !strings.HasPrefix(string(launchedContent), resolvedCodexHome+"|") {
+		t.Fatalf("expected launch into codex account, got %q", launchedContent)
+	}
+	if !strings.Contains(string(launchedContent), "transcript.md") {
+		t.Fatalf("expected launch prompt to reference transcript.md, got %q", launchedContent)
 	}
 }
 
@@ -130,17 +372,7 @@ func TestQuickHandoffByIDFindsClaudeConversationAndLaunchesCodex(t *testing.T) {
 	}
 
 	registryPath := filepath.Join(home, "accounts.json")
-	registryJSON := fmt.Sprintf(`{
-		"version": 1,
-		"next_number": {"claude": 2, "codex": 2},
-		"accounts": [
-			{"id": "claude-1", "provider": "claude", "number": 1, "home": %q, "alias": ""},
-			{"id": "codex-1", "provider": "codex", "number": 1, "home": %q, "alias": ""}
-		]
-	}`, claudeHome, codexHome)
-	if err := os.WriteFile(registryPath, []byte(registryJSON), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeRegistry(t, registryPath, claudeHome, codexHome)
 
 	launched := filepath.Join(home, "launched")
 	writeScript(t, filepath.Join(home, "bin", "codex"), fmt.Sprintf(
@@ -157,224 +389,5 @@ func TestQuickHandoffByIDFindsClaudeConversationAndLaunchesCodex(t *testing.T) {
 	}
 	if !strings.Contains(string(launchedContent), "transcript.md") {
 		t.Fatalf("expected codex to launch from the artifact, got %q", launchedContent)
-	}
-}
-
-// A project with no conversations at all used to be a dead end: the handoff
-// flow bailed out before showing anything. It must now still reach the
-// manual-id row, and an id typed there must resolve against every registered
-// account -- including a conversation recorded in a different project.
-func TestInteractiveHandoffAcceptsATypedIDWhenTheProjectHasNoConversations(t *testing.T) {
-	home := t.TempDir()
-	fakeBin := runWithFakePath(t, home)
-
-	project := filepath.Join(home, "project")
-	os.MkdirAll(project, 0o755)
-	elsewhere := filepath.Join(home, "elsewhere")
-	os.MkdirAll(elsewhere, 0o755)
-	resolvedElsewhere, err := filepath.EvalSymlinks(elsewhere)
-	if err != nil {
-		t.Fatal(err)
-	}
-	claudeHome := filepath.Join(home, ".claude")
-	codexHome := filepath.Join(home, ".codex")
-	codexSessions := filepath.Join(codexHome, "sessions", "2026", "08", "04")
-	os.MkdirAll(claudeHome, 0o755)
-	os.MkdirAll(codexSessions, 0o755)
-
-	longUUID := "019fcb8e-b8cf-76b1-bc81-e444a74c4d60"
-	sessionPath := filepath.Join(codexSessions, "rollout-2026-08-04T14-55-56-"+longUUID+".jsonl")
-	os.WriteFile(sessionPath, []byte(fmt.Sprintf(
-		`{"type":"session_meta","payload":{"id":%q,"cwd":%q}}`+"\n"+
-			`{"type":"response_item","payload":{"role":"user","content":[{"type":"input_text","text":"carry this on"}]}}`+"\n",
-		longUUID, resolvedElsewhere)), 0o644)
-
-	registryPath := filepath.Join(home, "accounts.json")
-	registryJSON := fmt.Sprintf(`{
-		"version": 1,
-		"next_number": {"claude": 2, "codex": 2},
-		"accounts": [
-			{"id": "claude-1", "provider": "claude", "number": 1, "home": %q, "alias": ""},
-			{"id": "codex-1", "provider": "codex", "number": 1, "home": %q, "alias": ""}
-		]
-	}`, claudeHome, codexHome)
-	os.WriteFile(registryPath, []byte(registryJSON), 0o644)
-
-	// The direction picked here is claude-1 -> codex-1, but the typed id
-	// belongs to codex-1, so the source flips to codex-1 and the target has
-	// to be re-picked (step 3).
-	state := filepath.Join(home, "state")
-	sessionRows := filepath.Join(home, "session-rows")
-	writeScript(t, filepath.Join(fakeBin, "fzf"), fmt.Sprintf(`#!/usr/bin/env bash
-n=$(cat %q 2>/dev/null || echo 0)
-if [ "$n" -eq 2 ]; then cat > %q; fi
-values=("action:handoff" "claude-1|codex-1" "action:manual-id" "claude-1")
-printf '%%s\n' "${values[$n]}"
-echo $((n+1)) > %q
-`, state, sessionRows, state))
-
-	launched := filepath.Join(home, "launched")
-	writeScript(t, filepath.Join(fakeBin, "claude"), fmt.Sprintf(
-		"#!/usr/bin/env bash\nif [ \"$1 $2\" = 'auth status' ]; then exit 0; fi\nprintf '%%s|%%s' \"$CLAUDE_CONFIG_DIR\" \"$1\" > %q\n",
-		launched,
-	))
-	writeScript(t, filepath.Join(fakeBin, "codex"), "#!/usr/bin/env bash\nexit 0\n")
-
-	cmd := exec.Command(os.Args[0], "-test.run=TestHelperRunMenu")
-	cmd.Dir = project
-	cmd.Env = append(os.Environ(), "GO_WANT_HELPER_MENU_PROCESS=1", "ACH_TEST_REGISTRY="+registryPath)
-	cmd.Stdin = strings.NewReader("019fcb8e\n")
-	var stdout, stderr bytes.Buffer
-	cmd.Stdout = &stdout
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("menu run failed: %v\nstderr: %s", err, stderr.String())
-	}
-
-	rows, err := os.ReadFile(sessionRows)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(rows), "手動輸入對話 ID") {
-		t.Fatalf("expected the manual-id row to be offered, got: %s", rows)
-	}
-	if !strings.Contains(stdout.String(), resolvedElsewhere) {
-		t.Fatalf("expected a warning naming the conversation's original project, got: %s", stdout.String())
-	}
-
-	launchedContent, err := os.ReadFile(launched)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(launchedContent), "transcript.md") {
-		t.Fatalf("expected the claude account to be launched at the new artifact, got %q", launchedContent)
-	}
-
-	var sourcePath string
-	filepath.Walk(filepath.Join(project, ".agent-handoffs"), func(path string, info os.FileInfo, err error) error {
-		if err == nil && filepath.Base(path) == "manifest.json" {
-			raw, _ := os.ReadFile(path)
-			var manifest map[string]any
-			json.Unmarshal(raw, &manifest)
-			source, _ := manifest["source"].(map[string]any)
-			sourcePath, _ = source["path"].(string)
-		}
-		return nil
-	})
-	if sourcePath == "" {
-		t.Fatal("expected a handoff artifact manifest.json to be created")
-	}
-	if filepath.Base(sourcePath) != filepath.Base(sessionPath) {
-		t.Fatalf("expected the artifact to snapshot the typed conversation, got %q", sourcePath)
-	}
-}
-
-// TestHelperRunMenu is not a real test; it's exec'd as a subprocess by
-// TestRunOffersNumberedShortcutsAndRestoresRealStdin so menu.Run's exec
-// into the (faked) provider CLI doesn't replace the test binary itself.
-func TestHelperRunMenu(t *testing.T) {
-	if os.Getenv("GO_WANT_HELPER_MENU_PROCESS") != "1" {
-		return
-	}
-	if err := Run(os.Getenv("ACH_TEST_REGISTRY")); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
-}
-
-func TestInteractiveHandoffPicksDirectionThenSessionAndLaunchesTarget(t *testing.T) {
-	home := t.TempDir()
-	fakeBin := runWithFakePath(t, home)
-
-	project := filepath.Join(home, "project")
-	os.MkdirAll(project, 0o755)
-	claudeHome := filepath.Join(home, ".claude")
-	codexHome := filepath.Join(home, ".codex")
-	longUUID := "edcda8ee-19af-45ac-ad5d-206136874fdd"
-	// The subprocess resolves its cwd via os.Getwd(), which returns the
-	// symlink-resolved path (e.g. /private/var/... on macOS), so the
-	// session directory must be keyed off the same resolved path.
-	resolvedProject, err := filepath.EvalSymlinks(project)
-	if err != nil {
-		t.Fatal(err)
-	}
-	sessionDir := filepath.Join(claudeHome, "projects", strings.NewReplacer("/", "-", "_", "-").Replace(resolvedProject))
-	os.MkdirAll(sessionDir, 0o755)
-	os.MkdirAll(codexHome, 0o755)
-	sessionPath := filepath.Join(sessionDir, "source.jsonl")
-	os.WriteFile(sessionPath, []byte(fmt.Sprintf(`{"type":"user","sessionId":%q,"message":{"content":"continue this"}}`+"\n", longUUID)), 0o644)
-
-	registryPath := filepath.Join(home, "accounts.json")
-	registryJSON := fmt.Sprintf(`{
-		"version": 1,
-		"next_number": {"claude": 2, "codex": 2},
-		"accounts": [
-			{"id": "claude-1", "provider": "claude", "number": 1, "home": %q, "alias": ""},
-			{"id": "codex-1", "provider": "codex", "number": 1, "home": %q, "alias": ""}
-		]
-	}`, claudeHome, codexHome)
-	os.WriteFile(registryPath, []byte(registryJSON), 0o644)
-
-	state := filepath.Join(home, "state")
-	sessionRows := filepath.Join(home, "session-rows")
-	writeScript(t, filepath.Join(fakeBin, "fzf"), fmt.Sprintf(`#!/usr/bin/env bash
-n=$(cat %q 2>/dev/null || echo 0)
-if [ "$n" -eq 2 ]; then cat > %q; fi
-values=("action:handoff" "claude-1|codex-1" %q)
-printf '%%s\n' "${values[$n]}"
-echo $((n+1)) > %q
-`, state, sessionRows, sessionPath, state))
-
-	launched := filepath.Join(home, "launched")
-	writeScript(t, filepath.Join(fakeBin, "codex"), fmt.Sprintf(
-		"#!/usr/bin/env bash\nif [ \"$1 $2\" = 'login status' ]; then exit 0; fi\nprintf '%%s|%%s' \"$CODEX_HOME\" \"$1\" > %q\n",
-		launched,
-	))
-	writeScript(t, filepath.Join(fakeBin, "claude"), "#!/usr/bin/env bash\nexit 0\n")
-
-	cmd := exec.Command(os.Args[0], "-test.run=TestHelperRunMenu")
-	cmd.Dir = project
-	cmd.Env = append(os.Environ(), "GO_WANT_HELPER_MENU_PROCESS=1", "ACH_TEST_REGISTRY="+registryPath)
-	var stderr bytes.Buffer
-	cmd.Stderr = &stderr
-	if err := cmd.Run(); err != nil {
-		t.Fatalf("menu run failed: %v\nstderr: %s", err, stderr.String())
-	}
-
-	rows, err := os.ReadFile(sessionRows)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(rows), "edcda8ee…4fdd") {
-		t.Fatalf("expected truncated session id in rows, got: %s", rows)
-	}
-	if strings.Contains(string(rows), longUUID) {
-		t.Fatalf("full uuid leaked into session rows: %s", rows)
-	}
-
-	launchedContent, err := os.ReadFile(launched)
-	if err != nil {
-		t.Fatal(err)
-	}
-	resolvedCodexHome, _ := filepath.Abs(codexHome)
-	if !strings.HasPrefix(string(launchedContent), resolvedCodexHome+"|") {
-		t.Fatalf("expected launch into codex account, got %q", launchedContent)
-	}
-	if !strings.Contains(string(launchedContent), "transcript.md") {
-		t.Fatalf("expected launch prompt to reference transcript.md, got %q", launchedContent)
-	}
-
-	manifestFound := false
-	filepath.Walk(filepath.Join(project, ".agent-handoffs"), func(path string, info os.FileInfo, err error) error {
-		if err == nil && filepath.Base(path) == "manifest.json" {
-			manifestFound = true
-			raw, _ := os.ReadFile(path)
-			var manifest map[string]any
-			json.Unmarshal(raw, &manifest)
-		}
-		return nil
-	})
-	if !manifestFound {
-		t.Fatal("expected a handoff artifact manifest.json to be created")
 	}
 }
