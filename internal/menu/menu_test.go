@@ -317,6 +317,9 @@ func TestHandoffPicksSourceThenConversationThenTarget(t *testing.T) {
 	if sources := callFile(t, calls, "rows-1"); !strings.Contains(sources, "1. Claude") {
 		t.Fatalf("expected a numbered source account level, got: %s", sources)
 	}
+	if sourceArgv := callFile(t, calls, "argv-1"); !strings.Contains(sourceArgv, "--header=主選單 > 接手對話 > 選擇來源 Agent") {
+		t.Fatalf("expected the source picker path bar to name its role, got argv: %s", sourceArgv)
+	}
 	rows := callFile(t, calls, "rows-2")
 	if !strings.Contains(rows, "edcda8ee…4fdd") {
 		t.Fatalf("expected truncated session id in rows, got: %s", rows)
@@ -324,7 +327,10 @@ func TestHandoffPicksSourceThenConversationThenTarget(t *testing.T) {
 	if strings.Contains(rows, longUUID) {
 		t.Fatalf("full uuid leaked into session rows: %s", rows)
 	}
-	if targetArgv := callFile(t, calls, "argv-3"); !strings.Contains(targetArgv, "--header=主選單 > 接手對話 > Claude") {
+	if sessionArgv := callFile(t, calls, "argv-2"); !strings.Contains(sessionArgv, "--header=主選單 > 接手對話 > 來源 Agent：Claude > 選擇來源對話") {
+		t.Fatalf("expected the conversation picker path bar to name its role, got argv: %s", sessionArgv)
+	}
+	if targetArgv := callFile(t, calls, "argv-3"); !strings.Contains(targetArgv, "--header=主選單 > 接手對話 > 來源 Agent：Claude > 選擇目標 Agent") {
 		t.Fatalf("expected the target picker to keep the path bar, got argv: %s", targetArgv)
 	}
 

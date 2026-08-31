@@ -31,6 +31,9 @@ const (
 	rootCrumb     = "主選單"
 	crumbChat     = "使用帳號對話"
 	crumbHandoff  = "接手對話"
+	crumbSource   = "選擇來源 Agent"
+	crumbSession  = "選擇來源對話"
+	crumbTarget   = "選擇目標 Agent"
 	crumbAccounts = "帳號設定"
 	crumbSetup    = "初次設定"
 )
@@ -39,6 +42,10 @@ const (
 // a keypress is answering is never ambiguous.
 func breadcrumb(segments ...string) string {
 	return strings.Join(append([]string{rootCrumb}, segments...), " > ")
+}
+
+func sourceAgentCrumb(label string) string {
+	return "來源 Agent：" + label
 }
 
 // showCrumbs prints the path bar above a plain-text prompt; fzf's --header
@@ -281,7 +288,7 @@ func chooseSourceAccount(r registry.Registry, labels map[string]string) (string,
 	if len(candidates) == 0 {
 		return "", fmt.Errorf("no account is registered")
 	}
-	return pickKey(candidates, breadcrumb(crumbHandoff), "來源帳號: ", true)
+	return pickKey(candidates, breadcrumb(crumbHandoff, crumbSource), "來源帳號: ", true)
 }
 
 func interactiveRegistryHandoff(registryPath, project string) error {
@@ -310,7 +317,8 @@ func interactiveRegistryHandoff(registryPath, project string) error {
 	candidates = append(candidates, sessions...)
 	candidates = append(candidates, session.Candidate{Path: manualIDRow, Description: manualIDLabel})
 
-	crumbs := breadcrumb(crumbHandoff, labels[sourceID])
+	sourceCrumb := sourceAgentCrumb(labels[sourceID])
+	crumbs := breadcrumb(crumbHandoff, sourceCrumb, crumbSession)
 	sessionPath, typed, err := pickSession(candidates, crumbs, "選擇對話，或直接輸入 ID: ")
 	if err != nil {
 		return err
@@ -324,7 +332,7 @@ func interactiveRegistryHandoff(registryPath, project string) error {
 		return manualIDHandoff(registryPath, r, labels, typed, project)
 	}
 
-	targetID, err := chooseTargetExcluding(r, labels, sourceID, crumbs)
+	targetID, err := chooseTargetExcluding(r, labels, sourceID, breadcrumb(crumbHandoff, sourceCrumb, crumbTarget))
 	if err != nil {
 		return err
 	}
@@ -461,7 +469,7 @@ func manualIDHandoff(registryPath string, r registry.Registry, labels map[string
 	}
 
 	sourceID := chosen.accountID
-	targetID, err := chooseTargetExcluding(r, labels, sourceID, breadcrumb(crumbHandoff, labels[sourceID]))
+	targetID, err := chooseTargetExcluding(r, labels, sourceID, breadcrumb(crumbHandoff, sourceAgentCrumb(labels[sourceID]), crumbTarget))
 	if err != nil {
 		return err
 	}
