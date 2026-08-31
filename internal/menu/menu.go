@@ -263,14 +263,6 @@ func RegistryHandoff(registryPath, sourceID, targetID, sessionPath, project stri
 	return nil
 }
 
-// manualIDRow is the sentinel path returned by pickSession when the user
-// picks the row that teaches the shortcut instead of using it. Typing an id
-// straight into the search box reaches the same place without the extra
-// keypress; the row is what makes that discoverable.
-const manualIDRow = "action:manual-id"
-
-const manualIDLabel = "✎ 輸入對話 ID（也可直接在上面的搜尋框輸入）"
-
 // chooseSourceAccount is the second level of the handoff flow. Every
 // registered account is offered whether or not its CLI is installed:
 // handing a conversation off only reads the source account's files, and an
@@ -308,25 +300,17 @@ func interactiveRegistryHandoff(registryPath, project string) error {
 	}
 
 	// A source account whose conversations cannot be listed is not a dead
-	// end: the id row below still reaches every account.
+	// end: a typed id still reaches every account.
 	sessions, err := sessionsForAccount(source, project)
 	if err != nil {
 		sessions = nil
 	}
-	candidates := make([]session.Candidate, 0, len(sessions)+1)
-	candidates = append(candidates, sessions...)
-	candidates = append(candidates, session.Candidate{Path: manualIDRow, Description: manualIDLabel})
 
 	sourceCrumb := sourceAgentCrumb(labels[sourceID])
 	crumbs := breadcrumb(crumbHandoff, sourceCrumb, crumbSession)
-	sessionPath, typed, err := pickSession(candidates, crumbs, "選擇對話，或直接輸入 ID: ")
+	sessionPath, typed, err := pickSession(sessions, crumbs, "搜尋或輸入對話 ID: ")
 	if err != nil {
 		return err
-	}
-	if sessionPath == manualIDRow {
-		showCrumbs(crumbs)
-		typed = readLine("對話 ID（可只輸入前綴）: ")
-		sessionPath = ""
 	}
 	if sessionPath == "" {
 		return manualIDHandoff(registryPath, r, labels, typed, project)

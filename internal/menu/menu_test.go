@@ -239,11 +239,11 @@ func TestHandoffUsesAnIDTypedIntoTheSearchBox(t *testing.T) {
 	if !strings.Contains(sessionArgv, "--print-query") {
 		t.Fatalf("expected the session picker to return its query, got argv: %s", sessionArgv)
 	}
-	if !strings.Contains(sessionArgv, "--header=主選單 > 接手對話 > Claude") {
+	if !strings.Contains(sessionArgv, "--header=主選單 > 接手對話 > 來源 Agent：Claude > 選擇來源對話") {
 		t.Fatalf("expected a path bar naming the source account, got argv: %s", sessionArgv)
 	}
-	if rows := callFile(t, calls, "rows-2"); !strings.Contains(rows, "輸入對話 ID") {
-		t.Fatalf("expected the id row to still be offered, got: %s", rows)
+	if rows := callFile(t, calls, "rows-2"); strings.Contains(rows, "輸入對話 ID") {
+		t.Fatalf("expected ids to be entered directly in the search box, got: %s", rows)
 	}
 	if !strings.Contains(stdout, resolvedElsewhere) {
 		t.Fatalf("expected a warning naming the conversation's original project, got: %s", stdout)
