@@ -19,17 +19,59 @@ import (
 
 // supportedVersion is the only snapshot schema version this code
 // understands. A file carrying any other version is treated the same as an
-// unparseable one: the account shows as having no data.
+// unparseable one: the account shows as having no data. For whoever writes
+// these files: an additive optional field keeps version 1 (readers here
+// already treat unknown fields and absent windows as no data); anything
+// that changes the meaning of an existing field is a deliberate break and
+// must bump this number.
 const supportedVersion = 1
 
+// fiveHourWindow and sevenDayWindow are the nominal lengths of the two
+// quota windows, used to infer that a window has reset even when its
+// snapshot carries no resets_at.
+const (
+	fiveHourWindow = 5 * time.Hour
+	sevenDayWindow = 7 * 24 * time.Hour
+)
+
 // Window is one quota window (5-hour or 7-day) read from a snapshot file.
+// UsedPercentage is nil when the field was absent from the JSON, which
+// BuildRows renders as no data rather than as 0%. ResetsAt is nil both when
+// the field was absent and when it could not be parsed as RFC3339 -- a bad
+// resets_at costs only itself, not the percentage beside it. See
+// UnmarshalJSON.
 type Window struct {
-	UsedPercentage float64    `json:"used_percentage"`
-	ResetsAt       *time.Time `json:"resets_at,omitempty"`
+	UsedPercentage *float64
+	ResetsAt       *time.Time
+}
+
+// UnmarshalJSON parses resets_at leniently: a value that is not a valid
+// RFC3339 timestamp leaves ResetsAt nil instead of failing, so a single bad
+// field in one window does not cost the whole snapshot its percentage.
+func (w *Window) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		UsedPercentage *float64 `json:"used_percentage"`
+		ResetsAt       *string  `json:"resets_at"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	w.UsedPercentage = raw.UsedPercentage
+	w.ResetsAt = nil
+	if raw.ResetsAt != nil {
+		if t, err := time.Parse(time.RFC3339, *raw.ResetsAt); err == nil {
+			w.ResetsAt = &t
+		}
+	}
+	return nil
 }
 
 // Snapshot is one account's usage snapshot, matched to a registered account
-// by ConfigDir. Either window may be nil.
+// by ConfigDir. Either window may be nil. ConfigDir, Version, and CheckedAt
+// are this snapshot's own identity and freshness -- unlike a window's
+// resets_at, an unparseable CheckedAt fails decoding the whole Snapshot
+// (ordinary strict JSON decoding already does this; there is no lenient
+// path for it).
 type Snapshot struct {
 	Version   int       `json:"version"`
 	ConfigDir string    `json:"config_dir"`
@@ -125,8 +167,8 @@ func BuildRows(accountRows []struct{ ID, Label string }, matches map[string]Snap
 		}
 		rows = append(rows, Row{
 			Label:     ar.Label,
-			FiveHour:  windowText(snap.FiveHour, now),
-			SevenDay:  windowText(snap.SevenDay, now),
+			FiveHour:  windowText(snap.FiveHour, snap.CheckedAt, fiveHourWindow, "5 小時", now),
+			SevenDay:  windowText(snap.SevenDay, snap.CheckedAt, sevenDayWindow, "7 天", now),
 			Freshness: freshnessText(snap.CheckedAt, now),
 		})
 	}
@@ -134,21 +176,27 @@ func BuildRows(accountRows []struct{ ID, Label string }, matches map[string]Snap
 }
 
 // windowText renders one window's percentage, or explains why the number
-// shown is not the current usage: a missing window is never shown as 0%,
-// and a window whose reset time has already passed shows the reset instead
-// of the stale percentage, since real usage is then almost certainly lower.
-func windowText(w *Window, now time.Time) string {
-	if w == nil {
+// shown is not the current usage. A missing window, or one with no
+// percentage in its snapshot, is never shown as 0%. A reset at or before
+// now is called out instead of the stale percentage, since real usage is
+// then almost certainly lower; when the snapshot carries no resets_at at
+// all, the window's own nominal length still lets a old-enough checkedAt
+// say the same thing -- a 5-hour window's snapshot older than 5 hours has
+// certainly reset, and likewise for the 7-day window at 7 days.
+func windowText(w *Window, checkedAt time.Time, length time.Duration, label string, now time.Time) string {
+	if w == nil || w.UsedPercentage == nil {
 		return "–"
 	}
-	if w.ResetsAt != nil && w.ResetsAt.Before(now) {
-		return fmt.Sprintf("已重置於 %s（原用量已過期）", w.ResetsAt.Local().Format("01/02 15:04"))
-	}
-	text := fmt.Sprintf("%.0f%%", w.UsedPercentage)
 	if w.ResetsAt != nil {
-		text += fmt.Sprintf("（%s 重置）", w.ResetsAt.Local().Format("01/02 15:04"))
+		if !w.ResetsAt.After(now) {
+			return fmt.Sprintf("已重置於 %s（原用量已過期）", w.ResetsAt.Local().Format("01/02 15:04"))
+		}
+		return fmt.Sprintf("%.0f%%（%s 重置）", *w.UsedPercentage, w.ResetsAt.Local().Format("01/02 15:04"))
 	}
-	return text
+	if now.Sub(checkedAt) >= length {
+		return fmt.Sprintf("已重置（資料逾 %s，原用量已過期）", label)
+	}
+	return fmt.Sprintf("%.0f%%", *w.UsedPercentage)
 }
 
 // freshnessText reports both the absolute local time a snapshot was taken
@@ -157,10 +205,13 @@ func freshnessText(checkedAt, now time.Time) string {
 	return fmt.Sprintf("%s（%s）", checkedAt.Local().Format("01/02 15:04"), ageText(checkedAt, now))
 }
 
+// ageText treats a checkedAt after now as clock skew on the writing
+// machine, not freshness, and calls it out rather than clamping the age to
+// zero and reading as "剛剛" -- the lie this view exists to prevent.
 func ageText(t, now time.Time) string {
 	d := now.Sub(t)
 	if d < 0 {
-		d = 0
+		return "時間異常（早於現在，來源主機時鐘可能不同步）"
 	}
 	switch {
 	case d < time.Minute:
