@@ -30,15 +30,16 @@ var errCancelled = errors.New("selection cancelled")
 // Breadcrumb segments for the levels below the root. Each level is named
 // once here so the path bar cannot drift from the menu row leading to it.
 const (
-	rootCrumb     = "主選單"
-	crumbChat     = "使用帳號對話"
-	crumbHandoff  = "接手對話"
-	crumbSource   = "選擇來源 Agent"
-	crumbSession  = "選擇來源對話"
-	crumbTarget   = "選擇目標 Agent"
-	crumbAccounts = "帳號設定"
-	crumbSetup    = "初次設定"
-	crumbUsage    = "查看用量"
+	rootCrumb       = "主選單"
+	crumbChat       = "使用帳號對話"
+	crumbHandoff    = "接手對話"
+	crumbSource     = "選擇來源 Agent"
+	crumbSession    = "選擇來源對話"
+	crumbTarget     = "選擇目標 Agent"
+	crumbAccounts   = "帳號設定"
+	crumbSetup      = "初次設定"
+	crumbUsage      = "查看用量"
+	crumbStatusline = "狀態列設定"
 )
 
 // breadcrumb renders the path bar shown above every picker, so which level
@@ -655,7 +656,7 @@ func shareAllAccountSettings(r registry.Registry) {
 	}
 }
 
-func manageAccounts(registryPath string) error {
+func manageAccounts(registryPath, usageDirFlag string, usageDirFlagExplicit bool) error {
 	crumbs := breadcrumb(crumbAccounts)
 	for {
 		actions := []kv{
@@ -666,6 +667,7 @@ func manageAccounts(registryPath string) error {
 			{"remove", "從 ccs 移除帳號"},
 			{"import", "匯入既有帳號目錄"},
 			{"usage-dir", "設定用量資料目錄"},
+			{"statusline", crumbStatusline},
 			{"back", "返回主選單"},
 		}
 		action, err := pickKey(actions, crumbs, "選擇動作: ", true)
@@ -815,7 +817,98 @@ func manageAccounts(registryPath string) error {
 			} else {
 				fmt.Printf("用量資料目錄已設定為：%s\n", resolved)
 			}
+		case "statusline":
+			usageDir := resolveUsageDir(registryPath, usageDirFlag, usageDirFlagExplicit)
+			if err := manageStatusline(registryPath, usageDir, actionCrumbs); err != nil {
+				return err
+			}
 		}
+	}
+}
+
+// manageStatusline shows what the primary claude account's shared
+// statusLine.command currently does about usage-snapshot writing, and lets
+// the user toggle it on or off. Every account of that provider reads this
+// same document (see ShareSettings), so the state and any change shown here
+// apply to all of them, not just one.
+func manageStatusline(registryPath, usageDir, crumbs string) error {
+	showCrumbs(crumbs)
+	r, err := registry.Load(registryPath)
+	if err != nil {
+		return err
+	}
+	info, err := registry.ReadStatuslineInfo(r, usageDir)
+	if err != nil {
+		return err
+	}
+	fmt.Println("此設定是 Claude 該 provider 所有帳號共用的一份 settings.json（symlink），不是單一帳號的設定。")
+	fmt.Printf("設定檔：%s\n", info.SettingsPath)
+
+	if info.Refusal != "" {
+		fmt.Printf("無法判讀 statusLine 設定（%s），不會做任何修改。請手動貼上以下設定：\n%s\n", info.Refusal, info.Snippet)
+		return nil
+	}
+
+	fmt.Printf("執行檔：%s\n", info.Executable)
+	fmt.Printf("ccs 目前讀取的用量目錄：%s\n", usageDir)
+	switch {
+	case !info.HasUsageDir:
+		fmt.Println("用量目錄參數：未設定（status line 目前不會寫入用量 snapshot）")
+	case info.Matches:
+		fmt.Printf("用量目錄參數：%s（與 ccs 一致，snapshot 寫入已啟用）\n", info.UsageDir)
+	default:
+		fmt.Printf("用量目錄參數：%s（與 ccs 目前讀取的目錄不一致）\n", info.UsageDir)
+	}
+
+	var actions []kv
+	switch {
+	case !info.HasUsageDir:
+		actions = []kv{{"enable", "啟用（加上 --usage-dir）"}, {"cancel", "取消"}}
+	case info.Matches:
+		actions = []kv{{"disable", "停用（移除 --usage-dir）"}, {"cancel", "取消"}}
+	default:
+		actions = []kv{
+			{"replace", "取代為 ccs 目前讀取的目錄"},
+			{"disable", "停用（移除既有設定）"},
+			{"cancel", "取消"},
+		}
+	}
+	choice, err := pickKey(actions, crumbs, "選擇動作: ", true)
+	if err != nil {
+		return err
+	}
+
+	var change registry.StatuslineChange
+	switch choice {
+	case "cancel":
+		return nil
+	case "enable":
+		change, err = registry.EnableStatuslineUsageDir(r, usageDir, false)
+	case "replace":
+		change, err = registry.EnableStatuslineUsageDir(r, usageDir, true)
+	case "disable":
+		change, err = registry.DisableStatuslineUsageDir(r, usageDir)
+	}
+	if err != nil {
+		return err
+	}
+	reportStatuslineChange(change)
+	return nil
+}
+
+func reportStatuslineChange(change registry.StatuslineChange) {
+	switch change.Outcome {
+	case registry.StatuslineWrote:
+		fmt.Printf("已更新 statusLine.command：%s\n", change.Info.Command)
+		fmt.Printf("原設定已備份到：%s\n", change.Backup)
+	case registry.StatuslineAlreadyEnabled:
+		fmt.Println("已經是啟用狀態，未做任何修改。")
+	case registry.StatuslineAlreadyDisabled:
+		fmt.Println("已經是停用狀態，未做任何修改。")
+	case registry.StatuslineMismatch:
+		fmt.Println("未做任何修改：請改選「取代」以覆蓋既有的 --usage-dir。")
+	case registry.StatuslineRefused:
+		fmt.Printf("未做任何修改（%s）。\n", change.Info.Refusal)
 	}
 }
 
@@ -937,7 +1030,7 @@ func Run(registryPath, usageDirFlag string, usageDirFlagExplicit bool) error {
 			}
 			return nil
 		case "accounts":
-			if err := manageAccounts(registryPath); err != nil {
+			if err := manageAccounts(registryPath, usageDirFlag, usageDirFlagExplicit); err != nil {
 				if errors.Is(err, errCancelled) {
 					continue
 				}

@@ -874,3 +874,122 @@ func TestManageAccountsClearsUsageDirectoryOnEmptyInput(t *testing.T) {
 		t.Fatalf("expected an empty input to clear the stored directory, got %q", updated.UsageDir)
 	}
 }
+
+// writeClaudeSettings writes a minimal, realistic settings.json (a
+// statusLine.command among other keys) as the claude account's shared
+// settings document.
+func writeClaudeSettings(t *testing.T, claudeHome, command string) {
+	t.Helper()
+	doc := fmt.Sprintf(`{
+  "model": "opusplan",
+  "statusLine": {
+    "type": "command",
+    "command": %q,
+    "padding": 0
+  },
+  "hooks": {}
+}
+`, command)
+	if err := os.WriteFile(filepath.Join(claudeHome, "settings.json"), []byte(doc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestManageAccountsOffersStatuslineAction(t *testing.T) {
+	home := t.TempDir()
+	runWithFakePath(t, home)
+
+	claudeHome := filepath.Join(home, ".claude")
+	codexHome := filepath.Join(home, ".codex")
+	os.MkdirAll(claudeHome, 0o755)
+	os.MkdirAll(codexHome, 0o755)
+	writeClaudeSettings(t, claudeHome, "~/.claude/statusline-go")
+
+	registryPath := filepath.Join(home, "accounts.json")
+	writeRegistry(t, registryPath, claudeHome, codexHome)
+
+	calls := fakeFzf(t, home, key("accounts"), key("back"), key("chat"), key("claude-1"))
+	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
+	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
+
+	if _, stderr, err := runMenu(t, registryPath, home, ""); err != nil {
+		t.Fatalf("menu run failed: %v\nstderr: %s", err, stderr)
+	}
+	actions := callFile(t, calls, "rows-1")
+	if !strings.Contains(actions, "狀態列設定") {
+		t.Fatalf("expected 帳號設定 to offer 狀態列設定, got: %s", actions)
+	}
+}
+
+// Enabling from the menu must write --usage-dir into the shared
+// settings.json and tell the user where the pre-write backup went.
+func TestManageAccountsStatuslineEnablesUsageDir(t *testing.T) {
+	home := t.TempDir()
+	runWithFakePath(t, home)
+
+	claudeHome := filepath.Join(home, ".claude")
+	codexHome := filepath.Join(home, ".codex")
+	os.MkdirAll(claudeHome, 0o755)
+	os.MkdirAll(codexHome, 0o755)
+	writeClaudeSettings(t, claudeHome, "~/.claude/statusline-go")
+
+	registryPath := filepath.Join(home, "accounts.json")
+	writeRegistry(t, registryPath, claudeHome, codexHome)
+	usageDir := filepath.Join(home, "usage")
+
+	fakeFzf(t, home, key("accounts"), key("statusline"), key("enable"), key("back"), key("chat"), key("claude-1"))
+	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
+	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
+
+	stdout, stderr, err := runMenuWithUsageDir(t, registryPath, usageDir, home, "")
+	if err != nil {
+		t.Fatalf("menu run failed: %v\nstderr: %s", err, stderr)
+	}
+	if !strings.Contains(stdout, "已更新") || !strings.Contains(stdout, "已備份") {
+		t.Fatalf("expected a confirmation naming the backup, got: %s", stdout)
+	}
+	raw, err := os.ReadFile(filepath.Join(claudeHome, "settings.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "--usage-dir "+usageDir) {
+		t.Fatalf("expected settings.json to carry --usage-dir %s, got: %s", usageDir, raw)
+	}
+}
+
+// A settings.json with no statusLine must be reported, with guidance, and
+// never written to.
+func TestManageAccountsStatuslineRefusesWhenStatusLineMissing(t *testing.T) {
+	home := t.TempDir()
+	runWithFakePath(t, home)
+
+	claudeHome := filepath.Join(home, ".claude")
+	codexHome := filepath.Join(home, ".codex")
+	os.MkdirAll(claudeHome, 0o755)
+	os.MkdirAll(codexHome, 0o755)
+	if err := os.WriteFile(filepath.Join(claudeHome, "settings.json"), []byte(`{"model":"opusplan"}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	registryPath := filepath.Join(home, "accounts.json")
+	writeRegistry(t, registryPath, claudeHome, codexHome)
+
+	fakeFzf(t, home, key("accounts"), key("statusline"), key("back"), key("chat"), key("claude-1"))
+	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
+	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
+
+	stdout, stderr, err := runMenu(t, registryPath, home, "")
+	if err != nil {
+		t.Fatalf("menu run failed: %v\nstderr: %s", err, stderr)
+	}
+	if !strings.Contains(stdout, "無法判讀") || !strings.Contains(stdout, "<path-to-your-status-line-executable>") {
+		t.Fatalf("expected a refusal message with a pasteable snippet, got: %s", stdout)
+	}
+	raw, err := os.ReadFile(filepath.Join(claudeHome, "settings.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != `{"model":"opusplan"}` {
+		t.Fatal("a refused statusline action modified the document")
+	}
+}
