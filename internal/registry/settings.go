@@ -36,6 +36,7 @@ type SettingsEntry struct {
 var sharedEntries = map[string][]SettingsEntry{
 	"claude": {
 		{Name: "settings.json", Kind: EntryFile},
+		{Name: "settings.local.json", Kind: EntryFile},
 		{Name: "skills", Kind: EntryDir},
 		{Name: "commands", Kind: EntryDir},
 		{Name: "agents", Kind: EntryDir},
@@ -46,37 +47,28 @@ var sharedEntries = map[string][]SettingsEntry{
 	},
 }
 
-// SharedEntries returns what a provider's accounts share, or nil for a
-// provider with nothing known to share, which callers must treat as
-// "nothing to share" rather than as an empty list to iterate.
-func SharedEntries(provider string) []SettingsEntry {
-	return sharedEntries[provider]
-}
-
 // EntryPath is where one shared entry lives inside an account home.
 func EntryPath(account Account, entry SettingsEntry) string {
 	return filepath.Join(account.Home, entry.Name)
 }
 
-// SettingsPath is an account's settings document -- the one shared file
-// entry, as opposed to the shared directories. It is empty for a provider
-// with no known file entry, which callers must treat as "nothing to share"
-// rather than as a path.
-func SettingsPath(account Account) string {
-	for _, entry := range sharedEntries[account.Provider] {
-		if entry.Kind == EntryFile {
-			return EntryPath(account, entry)
-		}
-	}
-	return ""
-}
+// symlinkFunc creates an entry's link; tests override it to force a
+// post-rename symlink failure without needing a real filesystem fault.
+var symlinkFunc = os.Symlink
 
 // EntryState is what a shared entry already is at the target, judged
 // against the account it would be sharing with.
 type EntryState int
 
 const (
-	EntryMissing EntryState = iota
+	// EntryUnexamined is the zero value: ShareSettings returned before
+	// looking at the target, either because the entry failed on its own
+	// account first (Err is set) or the source had nothing to share
+	// (SourceMissing is set instead). A caller must check Err and
+	// SourceMissing before reading Before, or it misreads "never looked"
+	// as EntryMissing's "the target had nothing there".
+	EntryUnexamined EntryState = iota
+	EntryMissing
 	EntryShared
 	EntryOwn
 	// EntryForeign is a symlink to something other than the source --
@@ -89,6 +81,8 @@ const (
 
 func (s EntryState) String() string {
 	switch s {
+	case EntryUnexamined:
+		return "unexamined"
 	case EntryMissing:
 		return "missing"
 	case EntryShared:
@@ -104,7 +98,10 @@ func (s EntryState) String() string {
 
 // EntryShare reports what ShareSettings found and did for one shared entry.
 type EntryShare struct {
-	Name   string
+	Name string
+	// Before is EntryUnexamined when Err or SourceMissing ended the check
+	// before the target was looked at; otherwise it is what entryState
+	// found there.
 	Before EntryState
 	// Backup is where an existing entry was moved, empty when nothing was
 	// moved or, for a file entry, when what was moved turned out to be
@@ -113,6 +110,10 @@ type EntryShare struct {
 	Backup string
 	// Linked is true only when this call created the symlink.
 	Linked bool
+	// SourceMissing is true when the source account has nothing at this
+	// entry to share -- an ordinary shape (a fresh account home commonly
+	// holds only settings.json), not a failure. Err is left nil.
+	SourceMissing bool
 	// Err is set when this entry was refused or a step failed. It never
 	// stops the other entries from being tried.
 	Err error
@@ -120,7 +121,7 @@ type EntryShare struct {
 
 // ShareSettings points every one of the target account's shared entries at
 // the source account's, so both accounts read and write one copy of each
-// and never drift. See SharedEntries for what is shared per provider.
+// and never drift. See sharedEntries for what is shared per provider.
 //
 // Each entry is judged and linked independently -- one entry's refusal or
 // failure is recorded on its own EntryShare and does not stop the others.
@@ -140,6 +141,9 @@ func ShareSettings(source, target Account, replace bool) ([]EntryShare, error) {
 	entries := sharedEntries[source.Provider]
 	if len(entries) == 0 {
 		return nil, fmt.Errorf("provider has nothing known to share: %s", source.Provider)
+	}
+	if len(sharedEntries[target.Provider]) == 0 {
+		return nil, fmt.Errorf("provider has nothing known to share: %s", target.Provider)
 	}
 	// Compare the homes and not just the ids: two registry entries can
 	// name one physical directory, and linking an entry to itself destroys
@@ -165,6 +169,10 @@ func shareEntry(source, target Account, entry SettingsEntry, replace bool) Entry
 	// this entry claims to be.
 	sourceInfo, err := os.Stat(sourcePath)
 	if err != nil {
+		if os.IsNotExist(err) {
+			share.SourceMissing = true
+			return share
+		}
 		share.Err = fmt.Errorf("%s has no %s to share: %w", source.ID, entry.Name, err)
 		return share
 	}
@@ -227,11 +235,18 @@ func shareEntry(source, target Account, entry SettingsEntry, replace bool) Entry
 		}
 		share.Backup = backup
 	}
-	if err := os.Symlink(sourcePath, targetPath); err != nil {
+	if err := symlinkFunc(sourcePath, targetPath); err != nil {
 		// An account with nothing there at all is worse than one that
-		// simply is not sharing, so put the original back.
-		if share.Backup != "" && renameEntry(share.Backup, targetPath, entry.Kind) == nil {
-			share.Backup = ""
+		// simply is not sharing, so put the original back -- but only if
+		// targetPath is still empty. Something may have claimed the name in
+		// the meantime, and renameEntry would then delete or overwrite that
+		// instead of the empty spot freeBackupPath vacated.
+		if share.Backup != "" {
+			if _, statErr := os.Lstat(targetPath); os.IsNotExist(statErr) {
+				if renameEntry(share.Backup, targetPath, entry.Kind) == nil {
+					share.Backup = ""
+				}
+			}
 		}
 		share.Err = err
 		return share
@@ -277,11 +292,13 @@ func freeBackupPath(path string, kind EntryKind) (string, error) {
 	return "", fmt.Errorf("no free backup name beside %s", path)
 }
 
-// renameEntry moves an entry aside. os.Rename refuses to replace an
+// renameEntry moves an entry to newpath. os.Rename refuses to replace an
 // existing directory even when it is empty, as a guard against silently
-// swallowing a populated one; freeBackupPath's directory placeholder is
-// verified empty by construction, so a directory entry bypasses that guard
-// and renames directly through the syscall.
+// swallowing a populated one, so a directory entry bypasses that guard via
+// the syscall directly. That is only safe because newpath is empty at both
+// call sites, for a different reason each time: moving an entry aside, it
+// is freeBackupPath's placeholder, verified empty by construction;
+// restoring one, the caller has just confirmed nothing exists at newpath.
 func renameEntry(oldpath, newpath string, kind EntryKind) error {
 	if kind == EntryDir {
 		return syscall.Rename(oldpath, newpath)
@@ -320,7 +337,7 @@ func entryState(sourcePath, targetPath string, kind EntryKind) (EntryState, erro
 		return EntryMissing, nil
 	}
 	if err != nil {
-		return EntryMissing, err
+		return EntryUnexamined, err
 	}
 	if info.Mode()&os.ModeSymlink == 0 {
 		if info.IsDir() != (kind == EntryDir) {
@@ -330,7 +347,7 @@ func entryState(sourcePath, targetPath string, kind EntryKind) (EntryState, erro
 	}
 	link, err := os.Readlink(targetPath)
 	if err != nil {
-		return EntryForeign, err
+		return EntryUnexamined, err
 	}
 	// A relative link is relative to the directory holding it.
 	if !filepath.IsAbs(link) {

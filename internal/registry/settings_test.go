@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -8,6 +9,17 @@ import (
 
 func account(id, provider, home string, number int) Account {
 	return Account{ID: id, Provider: provider, Number: number, Home: home}
+}
+
+// docPath is the primary settings document these tests exercise -- what
+// SettingsPath resolved before it was removed as dead, invariant-violating
+// API (nothing outside tests called it, and it silently picked the first
+// file entry once a provider could have more than one).
+func docPath(account Account) string {
+	if account.Provider == "codex" {
+		return filepath.Join(account.Home, "config.toml")
+	}
+	return filepath.Join(account.Home, "settings.json")
 }
 
 // homes builds a source home holding a settings document and an empty
@@ -25,7 +37,7 @@ func homes(t *testing.T, provider, content string) (Account, Account) {
 	}
 	source := account("src-1", provider, sourceHome, 1)
 	if content != "" {
-		if err := os.WriteFile(SettingsPath(source), []byte(content), 0o600); err != nil {
+		if err := os.WriteFile(docPath(source), []byte(content), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -75,14 +87,14 @@ func TestShareSettingsLinksAFreshAccountHome(t *testing.T) {
 	if share.Before != EntryMissing || !share.Linked || share.Backup != "" {
 		t.Fatalf("expected a plain link of an empty home, got %+v", share)
 	}
-	assertLinkedTo(t, target, SettingsPath(target), SettingsPath(source))
+	assertLinkedTo(t, target, docPath(target), docPath(source))
 
 	// Reading through the link must give the source document, and a write
 	// to the source must be visible through it.
-	if err := os.WriteFile(SettingsPath(source), []byte(`{"theme":"dark"}`), 0o600); err != nil {
+	if err := os.WriteFile(docPath(source), []byte(`{"theme":"dark"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	raw, err := os.ReadFile(SettingsPath(target))
+	raw, err := os.ReadFile(docPath(target))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +122,7 @@ func TestShareSettingsIsANoOpWhenAlreadyShared(t *testing.T) {
 // Account creation must never consume a document the account already has.
 func TestShareSettingsRefusesAnAccountsOwnDocumentUnlessReplacing(t *testing.T) {
 	source, target := homes(t, "claude", `{"a":1}`)
-	targetPath := SettingsPath(target)
+	targetPath := docPath(target)
 	if err := os.WriteFile(targetPath, []byte(`{"mine":true}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -134,7 +146,7 @@ func TestShareSettingsRefusesAnAccountsOwnDocumentUnlessReplacing(t *testing.T) 
 
 func TestShareSettingsMovesAnOwnDocumentAsideWhenReplacing(t *testing.T) {
 	source, target := homes(t, "claude", `{"a":1}`)
-	targetPath := SettingsPath(target)
+	targetPath := docPath(target)
 	if err := os.WriteFile(targetPath, []byte(`{"mine":true}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -147,7 +159,7 @@ func TestShareSettingsMovesAnOwnDocumentAsideWhenReplacing(t *testing.T) {
 	if share.Before != EntryOwn || !share.Linked || share.Backup == "" {
 		t.Fatalf("expected a replaced document with a backup, got %+v", share)
 	}
-	assertLinkedTo(t, target, targetPath, SettingsPath(source))
+	assertLinkedTo(t, target, targetPath, docPath(source))
 	raw, err := os.ReadFile(share.Backup)
 	if err != nil {
 		t.Fatalf("the backup named in the result is not readable: %v", err)
@@ -165,7 +177,7 @@ func TestShareSettingsRefusesALinkToSomewhereElse(t *testing.T) {
 	if err := os.WriteFile(elsewhere, []byte(`{"other":true}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	targetPath := SettingsPath(target)
+	targetPath := docPath(target)
 	if err := os.Symlink(elsewhere, targetPath); err != nil {
 		t.Fatal(err)
 	}
@@ -189,13 +201,12 @@ func TestShareSettingsRefusesALinkToSomewhereElse(t *testing.T) {
 	}
 }
 
-// Linking to a file that is not there would leave a broken link behind,
-// which reads as "shared" forever after. With several entries per
-// provider, a missing source is now a per-entry refusal rather than a
-// whole-call failure -- ShareSettings itself still succeeds, and every
-// entry (there being nothing else on this bare source either) is refused
-// on its own.
-func TestShareSettingsRefusesASourceWithNoDocument(t *testing.T) {
+// A bare source is an ordinary shape, not an error: most accounts only
+// have settings.json, and a fresh account has none of the shared
+// directories either. Each entry the source lacks is reported as
+// SourceMissing rather than as a per-entry error, and ShareSettings itself
+// still succeeds.
+func TestShareSettingsReportsSourceMissingForABareSource(t *testing.T) {
 	source, target := homes(t, "claude", "")
 
 	shares, err := ShareSettings(source, target, true)
@@ -203,14 +214,14 @@ func TestShareSettingsRefusesASourceWithNoDocument(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, share := range shares {
-		if share.Err == nil {
-			t.Fatalf("expected entry %q to be refused against a bare source", share.Name)
+		if !share.SourceMissing || share.Err != nil {
+			t.Fatalf("expected entry %q to be reported as missing at the source, got %+v", share.Name, share)
 		}
 		if share.Linked {
 			t.Fatalf("expected no entry to link against a bare source, got %+v", share)
 		}
 	}
-	if _, err := os.Lstat(SettingsPath(target)); !os.IsNotExist(err) {
+	if _, err := os.Lstat(docPath(target)); !os.IsNotExist(err) {
 		t.Fatal("expected no link to be created against a missing source")
 	}
 }
@@ -225,9 +236,6 @@ func TestShareSettingsRefusesAnAccountSharingWithItself(t *testing.T) {
 
 func TestShareSettingsUsesTheProvidersOwnSettingsFile(t *testing.T) {
 	source, target := homes(t, "codex", "model = \"gpt-5\"\n")
-	if filepath.Base(SettingsPath(source)) != "config.toml" {
-		t.Fatalf("expected codex to use config.toml, got %q", SettingsPath(source))
-	}
 
 	shares, err := ShareSettings(source, target, false)
 	if err != nil {
@@ -237,24 +245,18 @@ func TestShareSettingsUsesTheProvidersOwnSettingsFile(t *testing.T) {
 	if !share.Linked {
 		t.Fatalf("expected config.toml to link, got %+v", share)
 	}
-	assertLinkedTo(t, target, SettingsPath(target), SettingsPath(source))
-}
-
-func TestSettingsPathIsEmptyForAnUnknownProvider(t *testing.T) {
-	if path := SettingsPath(account("x-1", "gemini", "/tmp/x", 1)); path != "" {
-		t.Fatalf("expected no settings path for an unknown provider, got %q", path)
-	}
+	assertLinkedTo(t, target, docPath(target), docPath(source))
 }
 
 // A relative link is still a link to the source; resolving it against the
 // directory holding it is what makes that visible.
 func TestShareSettingsRecognisesARelativeLinkToTheSource(t *testing.T) {
 	source, target := homes(t, "claude", `{"a":1}`)
-	relative, err := filepath.Rel(target.Home, SettingsPath(source))
+	relative, err := filepath.Rel(target.Home, docPath(source))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(relative, SettingsPath(target)); err != nil {
+	if err := os.Symlink(relative, docPath(target)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -299,21 +301,21 @@ func TestShareSettingsRefusesTwoAccountsOnOnePhysicalHome(t *testing.T) {
 	}
 	source := account("claude-1", "claude", realHome, 1)
 	alias := account("claude-2", "claude", aliasHome, 2)
-	if err := os.WriteFile(SettingsPath(source), []byte(`{"real":true}`), 0o600); err != nil {
+	if err := os.WriteFile(docPath(source), []byte(`{"real":true}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
 	if _, err := ShareSettings(source, alias, true); err == nil {
 		t.Fatal("expected sharing to refuse two accounts on one home")
 	}
-	info, err := os.Lstat(SettingsPath(source))
+	info, err := os.Lstat(docPath(source))
 	if err != nil {
 		t.Fatalf("the source settings document is gone: %v", err)
 	}
 	if info.Mode()&os.ModeSymlink != 0 {
 		t.Fatal("the source settings document was replaced by a symlink")
 	}
-	raw, err := os.ReadFile(SettingsPath(source))
+	raw, err := os.ReadFile(docPath(source))
 	if err != nil || string(raw) != `{"real":true}` {
 		t.Fatalf("the source settings document was damaged: %q (%v)", raw, err)
 	}
@@ -370,7 +372,7 @@ func TestFreeBackupPathNeverHandsOutATakenName(t *testing.T) {
 // the account's real document as the backup and not the empty placeholder.
 func TestShareSettingsLeavesNoEmptyPlaceholderBesideTheBackup(t *testing.T) {
 	source, target := homes(t, "claude", `{"shared":true}`)
-	if err := os.WriteFile(SettingsPath(target), []byte(`{"mine":true}`), 0o600); err != nil {
+	if err := os.WriteFile(docPath(target), []byte(`{"mine":true}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -400,7 +402,7 @@ func TestShareSettingsLeavesNoEmptyPlaceholderBesideTheBackup(t *testing.T) {
 // at leaves the user a .bak to diff for no reason.
 func TestShareSettingsKeepsNoBackupOfAnIdenticalDocument(t *testing.T) {
 	source, target := homes(t, "claude", `{"shared":true}`)
-	targetPath := SettingsPath(target)
+	targetPath := docPath(target)
 	if err := os.WriteFile(targetPath, []byte(`{"shared":true}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -429,7 +431,7 @@ func TestShareSettingsKeepsNoBackupOfAnIdenticalDocument(t *testing.T) {
 // document would describe the wrong thing to the user.
 func TestShareSettingsRefusesADirectoryWhereTheDocumentBelongs(t *testing.T) {
 	source, target := homes(t, "claude", `{"a":1}`)
-	targetPath := SettingsPath(target)
+	targetPath := docPath(target)
 	if err := os.MkdirAll(filepath.Join(targetPath, "inside"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -496,7 +498,7 @@ func TestShareSettingsRefusesOneHomeReachedByADifferentSpelling(t *testing.T) {
 
 	source := account("claude-1", "claude", lower, 1)
 	other := account("claude-2", "claude", upper, 2)
-	if err := os.WriteFile(SettingsPath(source), []byte(`{"real":true}`), 0o600); err != nil {
+	if err := os.WriteFile(docPath(source), []byte(`{"real":true}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
@@ -510,11 +512,11 @@ func TestShareSettingsRefusesOneHomeReachedByADifferentSpelling(t *testing.T) {
 // file, because the source's is a symlink onto the target's.
 func TestShareSettingsRefusesWhenTheDocumentsAreAlreadyOneFile(t *testing.T) {
 	source, target := homes(t, "claude", "")
-	targetPath := SettingsPath(target)
+	targetPath := docPath(target)
 	if err := os.WriteFile(targetPath, []byte(`{"only":"copy"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Symlink(targetPath, SettingsPath(source)); err != nil {
+	if err := os.Symlink(targetPath, docPath(source)); err != nil {
 		t.Fatal(err)
 	}
 
@@ -540,7 +542,7 @@ func TestShareSettingsRefusesWhenTheDocumentsAreAlreadyOneFile(t *testing.T) {
 // directory and calling it a share.
 func TestShareSettingsRefusesADirectoryInTheSourcesDocumentPosition(t *testing.T) {
 	source, target := homes(t, "claude", "")
-	if err := os.MkdirAll(SettingsPath(source), 0o755); err != nil {
+	if err := os.MkdirAll(docPath(source), 0o755); err != nil {
 		t.Fatal(err)
 	}
 
@@ -552,7 +554,7 @@ func TestShareSettingsRefusesADirectoryInTheSourcesDocumentPosition(t *testing.T
 	if share.Err == nil {
 		t.Fatal("expected sharing to refuse a directory as the source document")
 	}
-	if _, err := os.Lstat(SettingsPath(target)); !os.IsNotExist(err) {
+	if _, err := os.Lstat(docPath(target)); !os.IsNotExist(err) {
 		t.Fatal("expected no link to a directory to be created")
 	}
 }
@@ -609,10 +611,11 @@ func TestShareSettingsKeepsADirectoryBackupEvenWhenIdentical(t *testing.T) {
 	assertLinkedTo(t, target, targetSkills, sourceSkills)
 }
 
-// One entry being refused must not stop the rest from linking: a source
-// that has settings.json but none of the optional shared directories still
-// shares the file while each missing directory is refused on its own.
-func TestShareSettingsLinksOneEntryWhileAnotherFails(t *testing.T) {
+// One entry having nothing to share must not stop the rest from linking: a
+// source that has settings.json but none of the other shared entries still
+// shares the file while each entry the source lacks is reported as
+// SourceMissing on its own.
+func TestShareSettingsLinksOneEntryWhileOthersHaveNothingToShare(t *testing.T) {
 	source, target := homes(t, "claude", `{"a":1}`)
 
 	shares, err := ShareSettings(source, target, false)
@@ -621,19 +624,158 @@ func TestShareSettingsLinksOneEntryWhileAnotherFails(t *testing.T) {
 	}
 	settings := entryNamed(t, shares, "settings.json")
 	if !settings.Linked || settings.Err != nil {
-		t.Fatalf("expected settings.json to link despite the other entries failing, got %+v", settings)
+		t.Fatalf("expected settings.json to link despite the other entries having nothing to share, got %+v", settings)
 	}
-	for _, name := range []string{"skills", "commands", "agents"} {
+	for _, name := range []string{"settings.local.json", "skills", "commands", "agents"} {
 		share := entryNamed(t, shares, name)
-		if share.Err == nil || share.Linked {
-			t.Fatalf("expected %q to be refused for having no source directory, got %+v", name, share)
+		if !share.SourceMissing || share.Err != nil || share.Linked {
+			t.Fatalf("expected %q to be reported as missing at the source, got %+v", name, share)
 		}
+	}
+}
+
+// The rename that moves the original aside succeeds, then the symlink
+// fails -- the only partial-failure path in the file. targetPath is still
+// empty at that point, so the restore must put the original back and clear
+// Backup from the result.
+func TestShareSettingsRestoresTheOriginalWhenTheSymlinkFails(t *testing.T) {
+	source, target := homes(t, "claude", `{"a":1}`)
+	targetPath := docPath(target)
+	if err := os.WriteFile(targetPath, []byte(`{"mine":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	original := symlinkFunc
+	symlinkFunc = func(string, string) error { return fmt.Errorf("simulated symlink failure") }
+	defer func() { symlinkFunc = original }()
+
+	shares, err := ShareSettings(source, target, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	share := entryNamed(t, shares, "settings.json")
+	if share.Err == nil || share.Linked {
+		t.Fatalf("expected the symlink failure to be reported and nothing linked, got %+v", share)
+	}
+	if share.Backup != "" {
+		t.Fatalf("expected the restored backup to be cleared from the result, got %s", share.Backup)
+	}
+	raw, err := os.ReadFile(targetPath)
+	if err != nil || string(raw) != `{"mine":true}` {
+		t.Fatalf("the original document was not restored: %q (%v)", raw, err)
+	}
+}
+
+// If something claims targetPath between the rename and the failed symlink
+// -- another process, in reality -- the restore must not clobber it, and
+// the caller must still be able to find the original at Backup.
+func TestShareSettingsKeepsTheBackupWhenSomethingClaimsTheTargetMeanwhile(t *testing.T) {
+	source, target := homes(t, "claude", `{"a":1}`)
+	targetPath := docPath(target)
+	if err := os.WriteFile(targetPath, []byte(`{"mine":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	original := symlinkFunc
+	symlinkFunc = func(_, newname string) error {
+		if err := os.WriteFile(newname, []byte(`{"raced":true}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return fmt.Errorf("simulated symlink failure")
+	}
+	defer func() { symlinkFunc = original }()
+
+	shares, err := ShareSettings(source, target, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	share := entryNamed(t, shares, "settings.json")
+	if share.Err == nil {
+		t.Fatal("expected the symlink failure to be reported")
+	}
+	if share.Backup == "" {
+		t.Fatal("expected the backup path to survive so the original is not lost")
+	}
+	raw, err := os.ReadFile(targetPath)
+	if err != nil || string(raw) != `{"raced":true}` {
+		t.Fatalf("the file that claimed targetPath was clobbered: %q (%v)", raw, err)
+	}
+	backupRaw, err := os.ReadFile(share.Backup)
+	if err != nil || string(backupRaw) != `{"mine":true}` {
+		t.Fatalf("the original document is not intact at the reported backup: %q (%v)", backupRaw, err)
+	}
+}
+
+// renameEntry's directory bypass relies on rename(2) refusing a non-empty
+// destination and succeeding over an empty one; this pins that kernel
+// behaviour directly rather than trusting it silently.
+func TestRenameEntryDirectoryBypassRefusesANonEmptyDestination(t *testing.T) {
+	dir := t.TempDir()
+	src := filepath.Join(dir, "src")
+	if err := os.MkdirAll(filepath.Join(src, "inside"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	nonEmpty := filepath.Join(dir, "dst-nonempty")
+	if err := os.MkdirAll(filepath.Join(nonEmpty, "already-here"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := renameEntry(src, nonEmpty, EntryDir); err == nil {
+		t.Fatal("expected renaming onto a non-empty directory to be refused")
+	}
+	if _, err := os.Stat(filepath.Join(src, "inside")); err != nil {
+		t.Fatalf("the source directory was not left intact: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(nonEmpty, "already-here")); err != nil {
+		t.Fatalf("the destination directory was not left intact: %v", err)
+	}
+
+	empty := filepath.Join(dir, "dst-empty")
+	if err := os.Mkdir(empty, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := renameEntry(src, empty, EntryDir); err != nil {
+		t.Fatalf("expected renaming onto an empty directory to succeed: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(empty, "inside")); err != nil {
+		t.Fatalf("expected the source contents under the now-replaced destination: %v", err)
+	}
+}
+
+// The file-entry collision loop is covered above; a directory placeholder
+// is claimed the same way through os.Mkdir, and a taken name must be
+// skipped for it too.
+func TestFreeBackupPathNeverHandsOutATakenDirectoryName(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "skills")
+
+	first, err := freeBackupPath(path, EntryDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Lstat(first)
+	if err != nil || !info.IsDir() {
+		t.Fatalf("freeBackupPath did not claim an empty directory: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(first, "marker"), []byte("FIRST"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	second, err := freeBackupPath(path, EntryDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second == first {
+		t.Fatalf("the same backup directory name was handed out twice: %s", first)
+	}
+	if _, err := os.Stat(filepath.Join(first, "marker")); err != nil {
+		t.Fatalf("the first backup directory is gone or was reused: %v", err)
 	}
 }
 
 func assertSourceIntact(t *testing.T, source Account, want string) {
 	t.Helper()
-	path := SettingsPath(source)
+	path := docPath(source)
 	info, err := os.Lstat(path)
 	if err != nil {
 		t.Fatalf("the source settings document is gone: %v", err)
