@@ -234,6 +234,21 @@ func TestShareSettingsRefusesAnAccountSharingWithItself(t *testing.T) {
 	}
 }
 
+// Only the source's provider was checked for a known settings table; a
+// target on a provider with nothing to share would otherwise have every
+// entry linked into it regardless.
+func TestShareSettingsRefusesATargetProviderWithNothingToShare(t *testing.T) {
+	source, target := homes(t, "claude", `{"a":1}`)
+	target.Provider = "gemini"
+
+	if _, err := ShareSettings(source, target, true); err == nil {
+		t.Fatal("expected sharing to refuse a target provider with nothing known to share")
+	}
+	if _, err := os.Lstat(filepath.Join(target.Home, "settings.json")); !os.IsNotExist(err) {
+		t.Fatal("expected nothing to be linked into the target")
+	}
+}
+
 func TestShareSettingsUsesTheProvidersOwnSettingsFile(t *testing.T) {
 	source, target := homes(t, "codex", "model = \"gpt-5\"\n")
 
