@@ -11,10 +11,7 @@ func account(id, provider, home string, number int) Account {
 	return Account{ID: id, Provider: provider, Number: number, Home: home}
 }
 
-// docPath is the primary settings document these tests exercise -- what
-// SettingsPath resolved before it was removed as dead, invariant-violating
-// API (nothing outside tests called it, and it silently picked the first
-// file entry once a provider could have more than one).
+// docPath is the primary settings document these tests exercise.
 func docPath(account Account) string {
 	if account.Provider == "codex" {
 		return filepath.Join(account.Home, "config.toml")

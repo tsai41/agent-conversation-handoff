@@ -57,11 +57,13 @@ var symlinkFunc = os.Symlink
 type EntryState int
 
 const (
-	// EntryUnexamined is the zero value: ShareSettings returned before
-	// looking at the target, either because the entry failed on its own
-	// account first (Err is set) or the source had nothing to share
-	// (SourceMissing is set instead). A caller must check Err and
-	// SourceMissing before reading Before, or it misreads "never looked"
+	// EntryUnexamined is the zero value: Before stays this way whenever
+	// shareEntry returns without a classification for the target, which
+	// happens for three reasons -- the source check failed first (Err is
+	// set), the source had nothing to share (SourceMissing is set instead),
+	// or entryState itself failed after Lstat succeeded (Err is set; the
+	// target was looked at, just not resolved). A caller must check Err and
+	// SourceMissing before reading Before, or it misreads "not classified"
 	// as EntryMissing's "the target had nothing there".
 	EntryUnexamined EntryState = iota
 	EntryMissing
@@ -296,10 +298,11 @@ func freeBackupPath(path string, kind EntryKind) (string, error) {
 // renameEntry moves an entry to newpath. os.Rename refuses to replace an
 // existing directory even when it is empty, as a guard against silently
 // swallowing a populated one, so a directory entry bypasses that guard via
-// the syscall directly. That is only safe because newpath is empty at both
-// call sites, for a different reason each time: moving an entry aside, it
-// is freeBackupPath's placeholder, verified empty by construction;
-// restoring one, the caller has just confirmed nothing exists at newpath.
+// the syscall directly. That is only safe when newpath is empty: moving an
+// entry aside, it is freeBackupPath's placeholder, verified empty by
+// construction; restoring one, the caller has just Lstat'd newpath as
+// nonexistent immediately beforehand -- a check, not a guarantee, since
+// something can still claim the name in the gap before this call runs.
 func renameEntry(oldpath, newpath string, kind EntryKind) error {
 	if kind == EntryDir {
 		return syscall.Rename(oldpath, newpath)
@@ -368,9 +371,8 @@ func entryState(sourcePath, targetPath string, kind EntryKind) (EntryState, erro
 // It answers false whenever it cannot prove the paths are one file,
 // including when Stat fails on either one -- that is "not proven same", not
 // "proven different". Only entryState's caller treats false as a reason to
-// refuse (a foreign link); the other two callers proceed on false, and rely
-// on the paths in question having already been stat'd successfully earlier
-// in the same call.
+// refuse (a foreign link); the other two callers proceed on false as the
+// ordinary case of two genuinely different paths.
 func sameFile(a, b string) bool {
 	if filepath.Clean(a) == filepath.Clean(b) {
 		return true
