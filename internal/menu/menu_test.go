@@ -1050,7 +1050,9 @@ func TestManageAccountsTrustFillsAndReportsField(t *testing.T) {
 	os.MkdirAll(claude2Home, 0o755)
 	os.MkdirAll(codexHome, 0o755)
 
-	if err := os.WriteFile(filepath.Join(claude1Home, ".claude.json"), []byte(`{"projects": {"/repo/a": {"hasTrustDialogAccepted": true}}}`), 0o644); err != nil {
+	// The primary's home is $HOME/.claude, which Claude Code runs with
+	// CLAUDE_CONFIG_DIR unset -- its .claude.json is $HOME/.claude.json.
+	if err := os.WriteFile(filepath.Join(home, ".claude.json"), []byte(`{"projects": {"/repo/a": {"hasTrustDialogAccepted": true}}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(claude2Home, ".claude.json"), []byte(`{"projects": {"/repo/a": {"someKey": "keep"}}}`), 0o644); err != nil {
@@ -1126,6 +1128,59 @@ func TestManageAccountsTrustRefusesCodexSourceWithoutTouchingFiles(t *testing.T)
 	for _, e := range entries {
 		if strings.Contains(e.Name(), ".bak-") {
 			t.Fatalf("expected no backup file, found %s", e.Name())
+		}
+	}
+}
+
+// Choosing cancel at the confirmation step must leave every target's
+// .claude.json byte-identical and create no backup.
+func TestManageAccountsTrustCancelWritesNothing(t *testing.T) {
+	home := t.TempDir()
+	runWithFakePath(t, home)
+
+	claude1Home := filepath.Join(home, ".claude")
+	claude2Home := filepath.Join(home, ".claude-2")
+	codexHome := filepath.Join(home, ".codex")
+	os.MkdirAll(claude1Home, 0o755)
+	os.MkdirAll(claude2Home, 0o755)
+	os.MkdirAll(codexHome, 0o755)
+
+	if err := os.WriteFile(filepath.Join(home, ".claude.json"), []byte(`{"projects": {"/repo/a": {"hasTrustDialogAccepted": true}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	targetDoc := `{"projects": {"/repo/a": {"someKey": "keep"}}}`
+	if err := os.WriteFile(filepath.Join(claude2Home, ".claude.json"), []byte(targetDoc), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	registryPath := filepath.Join(home, "accounts.json")
+	writeRegistryTwoClaudeAccounts(t, registryPath, claude1Home, claude2Home, codexHome)
+
+	fakeFzf(t, home, key("accounts"), key("trust"), key("claude-1"), key("cancel"), key("back"), key("chat"), key("claude-1"))
+	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
+	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
+
+	stdout, stderr, err := runMenu(t, registryPath, home, "")
+	if err != nil {
+		t.Fatalf("menu run failed: %v\nstderr: %s", err, stderr)
+	}
+	if strings.Contains(stdout, "已補上") {
+		t.Fatalf("expected no sync report after cancel, got: %s", stdout)
+	}
+	raw, err := os.ReadFile(filepath.Join(claude2Home, ".claude.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != targetDoc {
+		t.Fatalf("cancel modified the target: %s", raw)
+	}
+	entries, err := os.ReadDir(claude2Home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.Contains(e.Name(), ".bak-") {
+			t.Fatalf("cancel left a backup: %s", e.Name())
 		}
 	}
 }

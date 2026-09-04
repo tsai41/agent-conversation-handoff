@@ -166,7 +166,7 @@ ccs h 019fcb8e
 
 這是一次性的合併，不是即時連結：來源帳號之後又信任了新專案，要再跑一次才會補到其他帳號。
 
-寫入前一樣先備份成 `.claude.json.bak-<時間>`。目標帳號還沒執行過 Claude Code（沒有 `.claude.json`）或正有 session 在跑（`.claude.json.lock` 存在）時會略過該帳號並回報原因，不會建立檔案或搶寫。**跑之前請先關閉目標帳號的 Claude Code session**，否則它結束時寫回的內容會把這次合併蓋掉。
+檔案位置跟啟動方式一致：home 是預設目錄 `~/.claude` 的帳號以未設 `CLAUDE_CONFIG_DIR` 啟動，它的檔案在 `~/.claude.json`；其他帳號在各自 home 底下的 `.claude.json`。寫入前一樣先備份成 `.claude.json.bak-<時間>`，寫入期間會建立跟 Claude Code 同一個 `.claude.json.lock` 目錄鎖，寫完即移除；鎖被別的 session 持有時略過該帳號並印出鎖的路徑，超過一分鐘沒更新的殘留鎖照 Claude Code 自己的判定視為已放棄，會清掉再寫。單一目標帳號失敗（例如它的檔案不是合法 JSON）只會在該行回報，其他帳號照常處理；`projects` 或其中某個專案不是物件時整份拒寫並回報原因，不做部分合併。目標帳號還沒執行過 Claude Code（沒有 `.claude.json`）或正有 session 在跑（`.claude.json.lock` 存在）時會略過該帳號並回報原因，不會建立檔案或搶寫。**跑之前請先關閉目標帳號的 Claude Code session**，否則它結束時寫回的內容會把這次合併蓋掉。
 
 憑證都不在共用的那些項目裡，所以共用設定不會讓帳號互相踩到登入狀態。
 

@@ -917,9 +917,6 @@ func reportStatuslineChange(change registry.StatuslineChange) {
 	}
 }
 
-// manageTrustSync merges the chosen source account's project trust and
-// permission state (see registry.SyncProjectTrust) into every other
-// registered claude account, filling in only what each target lacks.
 func manageTrustSync(registryPath, crumbs string) error {
 	r, err := registry.Load(registryPath)
 	if err != nil {
@@ -967,6 +964,14 @@ func manageTrustSync(registryPath, crumbs string) error {
 }
 
 func reportTrustSync(label string, result registry.TrustSync) {
+	if result.Err != nil {
+		if result.Backup != "" {
+			fmt.Printf("%s: 同步失敗（%v），原設定已備份到 %s\n", label, result.Err, result.Backup)
+		} else {
+			fmt.Printf("%s: 同步失敗（%v）\n", label, result.Err)
+		}
+		return
+	}
 	if result.Skipped != "" {
 		fmt.Printf("%s: 未同步（%s）\n", label, result.Skipped)
 		return
