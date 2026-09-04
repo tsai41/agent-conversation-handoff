@@ -8,6 +8,7 @@ package provider
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -85,6 +86,7 @@ func Launch(account registry.Account, prompt string) error {
 	if err != nil {
 		return err
 	}
+	fmt.Println(launchBanner(account))
 	return syscall.Exec(binary, []string{command(account), prompt}, env)
 }
 
@@ -99,7 +101,20 @@ func LaunchSession(account registry.Account) error {
 	if err != nil {
 		return err
 	}
+	fmt.Println(launchBanner(account))
 	return syscall.Exec(binary, []string{command(account)}, env)
+}
+
+// launchBanner is the one line left in the terminal's scrollback above a
+// session, so that after the CLI exits it is still visible which account
+// the session ran as. The home is included because number and alias can
+// both be reassigned, the directory cannot.
+func launchBanner(account registry.Account) string {
+	label := fmt.Sprintf("%s #%d", registry.ProviderNames[account.Provider], account.Number)
+	if account.Alias != "" {
+		label += " " + account.Alias
+	}
+	return fmt.Sprintf("ccs 啟動帳號：%s（%s）", label, account.Home)
 }
 
 // Login replaces the current process with the provider CLI's login flow.
