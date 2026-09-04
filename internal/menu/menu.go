@@ -564,8 +564,11 @@ func offerSharedSettings(r registry.Registry, account registry.Account, crumbs s
 		fmt.Printf("提醒: 未能共用「%s」的設定: %s\n", labels[source.ID], err)
 		return
 	}
-	var linked, failed int
+	var linked, already, failed int
 	for _, share := range shares {
+		if share.SourceMissing {
+			continue
+		}
 		// Named before the error is handled: an entry moved aside by a
 		// share that then failed is exactly the one nobody must lose.
 		if share.Backup != "" {
@@ -578,13 +581,15 @@ func offerSharedSettings(r registry.Registry, account registry.Account, crumbs s
 		}
 		if share.Linked {
 			linked++
+		} else {
+			already++
 		}
 	}
 	switch {
 	case linked > 0 && failed == 0:
 		fmt.Printf("設定已共用自「%s」。\n", labels[source.ID])
 	case linked > 0 && failed > 0:
-		fmt.Printf("設定已共用自「%s」的 %d/%d 個項目，其餘請見上方提醒。\n", labels[source.ID], linked, linked+failed)
+		fmt.Printf("設定已共用自「%s」的 %d/%d 個項目，其餘請見上方提醒。\n", labels[source.ID], linked+already, linked+already+failed)
 	}
 }
 

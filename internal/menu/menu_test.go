@@ -498,3 +498,58 @@ func TestShareAllAccountSettingsReportsABareSourceDistinctly(t *testing.T) {
 		t.Fatal("expected nothing to have been linked from a bare source")
 	}
 }
+
+// offerSharedSettings reported linked+failed as the denominator, excluding
+// entries that were already shared -- one linked, three already shared and
+// one failed printed "1/2" instead of the true "4/5".
+func TestOfferSharedSettingsCountsAlreadySharedEntriesInTheTotal(t *testing.T) {
+	home := t.TempDir()
+	runWithFakePath(t, home)
+	fakeFzf(t, home, key("share"))
+
+	sourceHome := filepath.Join(home, "claude-1")
+	targetHome := filepath.Join(home, "claude-2")
+	if err := os.MkdirAll(sourceHome, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(targetHome, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"settings.json", "settings.local.json"} {
+		if err := os.WriteFile(filepath.Join(sourceHome, name), []byte("x"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, name := range []string{"skills", "commands", "agents"} {
+		if err := os.MkdirAll(filepath.Join(sourceHome, name, "x"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// settings.local.json, skills and commands already point at the source,
+	// as a previous share would have left them.
+	for _, name := range []string{"settings.local.json", "skills", "commands"} {
+		if err := os.Symlink(filepath.Join(sourceHome, name), filepath.Join(targetHome, name)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// agents is the account's own directory, which offerSharedSettings (no
+	// replace) must refuse. settings.json is left missing so it links fresh.
+	if err := os.MkdirAll(filepath.Join(targetHome, "agents", "mine"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	r := registry.Registry{Accounts: []registry.Account{
+		{ID: "claude-1", Provider: "claude", Number: 1, Home: sourceHome},
+		{ID: "claude-2", Provider: "claude", Number: 2, Home: targetHome},
+	}}
+	target := registry.Account{ID: "claude-2", Provider: "claude", Number: 2, Home: targetHome}
+
+	out := captureStdout(t, func() { offerSharedSettings(r, target, "") })
+
+	if !strings.Contains(out, "4/5 個項目") {
+		t.Fatalf("expected the summary to count all five entries, got: %s", out)
+	}
+	if strings.Contains(out, "1/2 個項目") {
+		t.Fatalf("expected the old under-reporting fraction not to appear, got: %s", out)
+	}
+}
