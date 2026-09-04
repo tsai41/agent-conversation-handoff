@@ -32,9 +32,22 @@ func homes(t *testing.T, provider, content string) (Account, Account) {
 	return source, account("tgt-2", provider, targetHome, 2)
 }
 
-func assertLinkedTo(t *testing.T, target Account, want string) {
+// entryNamed finds one entry's result by name, failing the test if
+// ShareSettings did not return it -- a missing entry is itself a bug, not a
+// case for the caller to handle.
+func entryNamed(t *testing.T, shares []EntryShare, name string) EntryShare {
 	t.Helper()
-	path := SettingsPath(target)
+	for _, share := range shares {
+		if share.Name == name {
+			return share
+		}
+	}
+	t.Fatalf("no %q entry in %+v", name, shares)
+	return EntryShare{}
+}
+
+func assertLinkedTo(t *testing.T, target Account, path, want string) {
+	t.Helper()
 	info, err := os.Lstat(path)
 	if err != nil {
 		t.Fatal(err)
@@ -54,14 +67,15 @@ func assertLinkedTo(t *testing.T, target Account, want string) {
 func TestShareSettingsLinksAFreshAccountHome(t *testing.T) {
 	source, target := homes(t, "claude", `{"statusLine":{"command":"x"}}`)
 
-	share, err := ShareSettings(source, target, false)
+	shares, err := ShareSettings(source, target, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if share.Before != SettingsMissing || !share.Linked || share.Backup != "" {
+	share := entryNamed(t, shares, "settings.json")
+	if share.Before != EntryMissing || !share.Linked || share.Backup != "" {
 		t.Fatalf("expected a plain link of an empty home, got %+v", share)
 	}
-	assertLinkedTo(t, target, SettingsPath(source))
+	assertLinkedTo(t, target, SettingsPath(target), SettingsPath(source))
 
 	// Reading through the link must give the source document, and a write
 	// to the source must be visible through it.
@@ -83,11 +97,12 @@ func TestShareSettingsIsANoOpWhenAlreadyShared(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	share, err := ShareSettings(source, target, false)
+	shares, err := ShareSettings(source, target, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if share.Before != SettingsShared || share.Linked || share.Backup != "" {
+	share := entryNamed(t, shares, "settings.json")
+	if share.Before != EntryShared || share.Linked || share.Backup != "" {
 		t.Fatalf("expected an already-shared no-op, got %+v", share)
 	}
 }
@@ -100,11 +115,15 @@ func TestShareSettingsRefusesAnAccountsOwnDocumentUnlessReplacing(t *testing.T) 
 		t.Fatal(err)
 	}
 
-	share, err := ShareSettings(source, target, false)
-	if err == nil {
+	shares, err := ShareSettings(source, target, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	share := entryNamed(t, shares, "settings.json")
+	if share.Err == nil {
 		t.Fatal("expected sharing to refuse an account's own settings")
 	}
-	if share.Before != SettingsOwn || share.Linked {
+	if share.Before != EntryOwn || share.Linked {
 		t.Fatalf("expected the refusal to report an own document, got %+v", share)
 	}
 	raw, _ := os.ReadFile(targetPath)
@@ -120,14 +139,15 @@ func TestShareSettingsMovesAnOwnDocumentAsideWhenReplacing(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	share, err := ShareSettings(source, target, true)
+	shares, err := ShareSettings(source, target, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if share.Before != SettingsOwn || !share.Linked || share.Backup == "" {
+	share := entryNamed(t, shares, "settings.json")
+	if share.Before != EntryOwn || !share.Linked || share.Backup == "" {
 		t.Fatalf("expected a replaced document with a backup, got %+v", share)
 	}
-	assertLinkedTo(t, target, SettingsPath(source))
+	assertLinkedTo(t, target, targetPath, SettingsPath(source))
 	raw, err := os.ReadFile(share.Backup)
 	if err != nil {
 		t.Fatalf("the backup named in the result is not readable: %v", err)
@@ -151,11 +171,15 @@ func TestShareSettingsRefusesALinkToSomewhereElse(t *testing.T) {
 	}
 
 	for _, replace := range []bool{false, true} {
-		share, err := ShareSettings(source, target, replace)
-		if err == nil {
+		shares, err := ShareSettings(source, target, replace)
+		if err != nil {
+			t.Fatal(err)
+		}
+		share := entryNamed(t, shares, "settings.json")
+		if share.Err == nil {
 			t.Fatalf("expected a refusal with replace=%v", replace)
 		}
-		if share.Before != SettingsForeign {
+		if share.Before != EntryForeign {
 			t.Fatalf("expected a foreign link to be reported, got %+v", share)
 		}
 		link, _ := os.Readlink(targetPath)
@@ -166,12 +190,25 @@ func TestShareSettingsRefusesALinkToSomewhereElse(t *testing.T) {
 }
 
 // Linking to a file that is not there would leave a broken link behind,
-// which reads as "shared" forever after.
+// which reads as "shared" forever after. With several entries per
+// provider, a missing source is now a per-entry refusal rather than a
+// whole-call failure -- ShareSettings itself still succeeds, and every
+// entry (there being nothing else on this bare source either) is refused
+// on its own.
 func TestShareSettingsRefusesASourceWithNoDocument(t *testing.T) {
 	source, target := homes(t, "claude", "")
 
-	if _, err := ShareSettings(source, target, true); err == nil {
-		t.Fatal("expected sharing to refuse a source with no settings document")
+	shares, err := ShareSettings(source, target, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, share := range shares {
+		if share.Err == nil {
+			t.Fatalf("expected entry %q to be refused against a bare source", share.Name)
+		}
+		if share.Linked {
+			t.Fatalf("expected no entry to link against a bare source, got %+v", share)
+		}
 	}
 	if _, err := os.Lstat(SettingsPath(target)); !os.IsNotExist(err) {
 		t.Fatal("expected no link to be created against a missing source")
@@ -192,10 +229,15 @@ func TestShareSettingsUsesTheProvidersOwnSettingsFile(t *testing.T) {
 		t.Fatalf("expected codex to use config.toml, got %q", SettingsPath(source))
 	}
 
-	if _, err := ShareSettings(source, target, false); err != nil {
+	shares, err := ShareSettings(source, target, false)
+	if err != nil {
 		t.Fatal(err)
 	}
-	assertLinkedTo(t, target, SettingsPath(source))
+	share := entryNamed(t, shares, "config.toml")
+	if !share.Linked {
+		t.Fatalf("expected config.toml to link, got %+v", share)
+	}
+	assertLinkedTo(t, target, SettingsPath(target), SettingsPath(source))
 }
 
 func TestSettingsPathIsEmptyForAnUnknownProvider(t *testing.T) {
@@ -216,11 +258,12 @@ func TestShareSettingsRecognisesARelativeLinkToTheSource(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	share, err := ShareSettings(source, target, false)
+	shares, err := ShareSettings(source, target, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if share.Before != SettingsShared || share.Linked {
+	share := entryNamed(t, shares, "settings.json")
+	if share.Before != EntryShared || share.Linked {
 		t.Fatalf("expected a relative link to count as already shared, got %+v", share)
 	}
 }
@@ -291,7 +334,7 @@ func TestFreeBackupPathNeverHandsOutATakenName(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "settings.json")
 
-	first, err := freeBackupPath(path)
+	first, err := freeBackupPath(path, EntryFile)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -307,7 +350,7 @@ func TestFreeBackupPathNeverHandsOutATakenName(t *testing.T) {
 	if err := os.WriteFile(first, []byte("FIRST"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	second, err := freeBackupPath(path)
+	second, err := freeBackupPath(path, EntryFile)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -331,10 +374,11 @@ func TestShareSettingsLeavesNoEmptyPlaceholderBesideTheBackup(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	share, err := ShareSettings(source, target, true)
+	shares, err := ShareSettings(source, target, true)
 	if err != nil {
 		t.Fatal(err)
 	}
+	share := entryNamed(t, shares, "settings.json")
 	entries, err := os.ReadDir(target.Home)
 	if err != nil {
 		t.Fatal(err)
@@ -361,10 +405,11 @@ func TestShareSettingsKeepsNoBackupOfAnIdenticalDocument(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	share, err := ShareSettings(source, target, true)
+	shares, err := ShareSettings(source, target, true)
 	if err != nil {
 		t.Fatal(err)
 	}
+	share := entryNamed(t, shares, "settings.json")
 	if !share.Linked {
 		t.Fatalf("expected the account to be relinked, got %+v", share)
 	}
@@ -389,15 +434,48 @@ func TestShareSettingsRefusesADirectoryWhereTheDocumentBelongs(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	share, err := ShareSettings(source, target, true)
-	if err == nil {
+	shares, err := ShareSettings(source, target, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	share := entryNamed(t, shares, "settings.json")
+	if share.Err == nil {
 		t.Fatal("expected sharing to refuse a directory")
 	}
-	if share.Before != SettingsDirectory {
+	if share.Before != EntryWrongKind {
 		t.Fatalf("expected the directory to be classified as such, got %v", share.Before)
 	}
 	if _, err := os.Stat(filepath.Join(targetPath, "inside")); err != nil {
 		t.Fatalf("the directory was moved aside: %v", err)
+	}
+}
+
+// A plain file sitting where a shared directory belongs is the mirror
+// image of the case above, and must be refused the same way.
+func TestShareSettingsRefusesAFileWhereASharedDirectoryBelongs(t *testing.T) {
+	source, target := homes(t, "claude", `{"a":1}`)
+	if err := os.MkdirAll(filepath.Join(source.Home, "skills"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	targetSkills := filepath.Join(target.Home, "skills")
+	if err := os.WriteFile(targetSkills, []byte("not a directory"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	shares, err := ShareSettings(source, target, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	share := entryNamed(t, shares, "skills")
+	if share.Err == nil {
+		t.Fatal("expected sharing to refuse a file where a directory belongs")
+	}
+	if share.Before != EntryWrongKind {
+		t.Fatalf("expected the file to be classified as the wrong kind, got %v", share.Before)
+	}
+	raw, err := os.ReadFile(targetSkills)
+	if err != nil || string(raw) != "not a directory" {
+		t.Fatalf("the file was moved aside: %q (%v)", raw, err)
 	}
 }
 
@@ -440,7 +518,12 @@ func TestShareSettingsRefusesWhenTheDocumentsAreAlreadyOneFile(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	if _, err := ShareSettings(source, target, true); err == nil {
+	shares, err := ShareSettings(source, target, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	share := entryNamed(t, shares, "settings.json")
+	if share.Err == nil {
 		t.Fatal("expected sharing to refuse two names for one document")
 	}
 	raw, err := os.ReadFile(targetPath)
@@ -461,11 +544,90 @@ func TestShareSettingsRefusesADirectoryInTheSourcesDocumentPosition(t *testing.T
 		t.Fatal(err)
 	}
 
-	if _, err := ShareSettings(source, target, true); err == nil {
+	shares, err := ShareSettings(source, target, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	share := entryNamed(t, shares, "settings.json")
+	if share.Err == nil {
 		t.Fatal("expected sharing to refuse a directory as the source document")
 	}
 	if _, err := os.Lstat(SettingsPath(target)); !os.IsNotExist(err) {
 		t.Fatal("expected no link to a directory to be created")
+	}
+}
+
+// A directory entry links the same way a file entry does: the whole
+// directory becomes a symlink onto the source's.
+func TestShareSettingsLinksADirectoryEntry(t *testing.T) {
+	source, target := homes(t, "claude", `{"a":1}`)
+	sourceSkills := filepath.Join(source.Home, "skills")
+	if err := os.MkdirAll(filepath.Join(sourceSkills, "go-test-style"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	shares, err := ShareSettings(source, target, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	share := entryNamed(t, shares, "skills")
+	if share.Before != EntryMissing || !share.Linked || share.Backup != "" {
+		t.Fatalf("expected the skills directory to link outright, got %+v", share)
+	}
+	targetSkills := filepath.Join(target.Home, "skills")
+	assertLinkedTo(t, target, targetSkills, sourceSkills)
+	if _, err := os.Stat(filepath.Join(targetSkills, "go-test-style")); err != nil {
+		t.Fatalf("the linked directory does not show the source's contents: %v", err)
+	}
+}
+
+// Nothing recursively compares directory contents, so a directory backup
+// is kept even when replace is true and the two directories happen to
+// agree -- unlike a file backup, which is discarded when it is redundant.
+func TestShareSettingsKeepsADirectoryBackupEvenWhenIdentical(t *testing.T) {
+	source, target := homes(t, "claude", `{"a":1}`)
+	sourceSkills := filepath.Join(source.Home, "skills")
+	targetSkills := filepath.Join(target.Home, "skills")
+	if err := os.MkdirAll(filepath.Join(sourceSkills, "shared-skill"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(targetSkills, "shared-skill"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	shares, err := ShareSettings(source, target, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	share := entryNamed(t, shares, "skills")
+	if !share.Linked || share.Backup == "" {
+		t.Fatalf("expected the directory to be relinked with a backup kept, got %+v", share)
+	}
+	if _, err := os.Stat(filepath.Join(share.Backup, "shared-skill")); err != nil {
+		t.Fatalf("the directory backup was not kept intact: %v", err)
+	}
+	assertLinkedTo(t, target, targetSkills, sourceSkills)
+}
+
+// One entry being refused must not stop the rest from linking: a source
+// that has settings.json but none of the optional shared directories still
+// shares the file while each missing directory is refused on its own.
+func TestShareSettingsLinksOneEntryWhileAnotherFails(t *testing.T) {
+	source, target := homes(t, "claude", `{"a":1}`)
+
+	shares, err := ShareSettings(source, target, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	settings := entryNamed(t, shares, "settings.json")
+	if !settings.Linked || settings.Err != nil {
+		t.Fatalf("expected settings.json to link despite the other entries failing, got %+v", settings)
+	}
+	for _, name := range []string{"skills", "commands", "agents"} {
+		share := entryNamed(t, shares, name)
+		if share.Err == nil || share.Linked {
+			t.Fatalf("expected %q to be refused for having no source directory, got %+v", name, share)
+		}
 	}
 }
 
