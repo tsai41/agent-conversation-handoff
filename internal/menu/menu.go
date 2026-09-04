@@ -668,6 +668,7 @@ func manageAccounts(registryPath, usageDirFlag string, usageDirFlagExplicit bool
 			{"import", "匯入既有帳號目錄"},
 			{"usage-dir", "設定用量資料目錄"},
 			{"statusline", crumbStatusline},
+			{"trust", "同步專案信任到其他帳號"},
 			{"back", "返回主選單"},
 		}
 		action, err := pickKey(actions, crumbs, "選擇動作: ", true)
@@ -822,6 +823,10 @@ func manageAccounts(registryPath, usageDirFlag string, usageDirFlagExplicit bool
 			if err := manageStatusline(registryPath, usageDir, actionCrumbs); err != nil {
 				return err
 			}
+		case "trust":
+			if err := manageTrustSync(registryPath, actionCrumbs); err != nil {
+				return err
+			}
 		}
 	}
 }
@@ -910,6 +915,63 @@ func reportStatuslineChange(change registry.StatuslineChange) {
 	case registry.StatuslineRefused:
 		fmt.Printf("未做任何修改（%s）。\n", change.Info.Refusal)
 	}
+}
+
+// manageTrustSync merges the chosen source account's project trust and
+// permission state (see registry.SyncProjectTrust) into every other
+// registered claude account, filling in only what each target lacks.
+func manageTrustSync(registryPath, crumbs string) error {
+	r, err := registry.Load(registryPath)
+	if err != nil {
+		return err
+	}
+	labels := accountLabels(r)
+	sourceID, err := chooseRegisteredAccount(r, crumbs, "選擇來源帳號: ")
+	if err != nil {
+		return err
+	}
+	source, err := registry.FindAccount(r, sourceID)
+	if err != nil {
+		return err
+	}
+	if source.Provider != "claude" {
+		fmt.Println("只有 Claude 帳號有這份專案信任狀態，其他 provider 沒有可同步的內容。")
+		return nil
+	}
+
+	fmt.Println("只補目標帳號缺的專案信任與權限欄位，不覆蓋既有值。")
+	fmt.Println("目標帳號若有 Claude Code session 在跑，請先關閉，否則它結束時會把這次合併蓋回去。")
+	confirmation, err := pickKey([]kv{
+		{"confirm", fmt.Sprintf("將「%s」的專案信任同步到其他帳號", labels[source.ID])},
+		{"cancel", "取消"},
+	}, crumbs, "確認同步專案信任: ", true)
+	if err != nil {
+		return err
+	}
+	if confirmation != "confirm" {
+		return nil
+	}
+
+	results, err := registry.SyncProjectTrustToAll(r, source)
+	if err != nil {
+		return err
+	}
+	if len(results) == 0 {
+		fmt.Println("沒有其他 Claude 帳號可以同步。")
+		return nil
+	}
+	for _, result := range results {
+		reportTrustSync(labels[result.Target.ID], result)
+	}
+	return nil
+}
+
+func reportTrustSync(label string, result registry.TrustSync) {
+	if result.Skipped != "" {
+		fmt.Printf("%s: 未同步（%s）\n", label, result.Skipped)
+		return
+	}
+	fmt.Printf("%s: 已補上 %d 個專案、%d 個欄位，原設定已備份到 %s\n", label, result.ProjectsAdded, result.FieldsFilled, result.Backup)
 }
 
 // launchAccount is the second level of the chat flow. provider.LaunchSession

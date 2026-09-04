@@ -993,3 +993,139 @@ func TestManageAccountsStatuslineRefusesWhenStatusLineMissing(t *testing.T) {
 		t.Fatal("a refused statusline action modified the document")
 	}
 }
+
+// writeRegistryTwoClaudeAccounts is writeRegistry with a second claude
+// account, for tests that need trust to have a real other-account target.
+func writeRegistryTwoClaudeAccounts(t *testing.T, path, claude1Home, claude2Home, codexHome string) {
+	t.Helper()
+	content := fmt.Sprintf(`{
+		"version": 1,
+		"next_number": {"claude": 3, "codex": 2},
+		"accounts": [
+			{"id": "claude-1", "provider": "claude", "number": 1, "home": %q, "alias": ""},
+			{"id": "claude-2", "provider": "claude", "number": 2, "home": %q, "alias": ""},
+			{"id": "codex-1", "provider": "codex", "number": 1, "home": %q, "alias": ""}
+		]
+	}`, claude1Home, claude2Home, codexHome)
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestManageAccountsOffersTrustAction(t *testing.T) {
+	home := t.TempDir()
+	runWithFakePath(t, home)
+
+	claudeHome := filepath.Join(home, ".claude")
+	codexHome := filepath.Join(home, ".codex")
+	os.MkdirAll(claudeHome, 0o755)
+	os.MkdirAll(codexHome, 0o755)
+
+	registryPath := filepath.Join(home, "accounts.json")
+	writeRegistry(t, registryPath, claudeHome, codexHome)
+
+	calls := fakeFzf(t, home, key("accounts"), key("back"), key("chat"), key("claude-1"))
+	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
+	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
+
+	if _, stderr, err := runMenu(t, registryPath, home, ""); err != nil {
+		t.Fatalf("menu run failed: %v\nstderr: %s", err, stderr)
+	}
+	actions := callFile(t, calls, "rows-1")
+	if !strings.Contains(actions, "同步專案信任到其他帳號") {
+		t.Fatalf("expected 帳號設定 to offer 同步專案信任到其他帳號, got: %s", actions)
+	}
+}
+
+// A run that fills a field a target project is missing must write it into
+// that target's .claude.json, back the original up first, and report both.
+func TestManageAccountsTrustFillsAndReportsField(t *testing.T) {
+	home := t.TempDir()
+	runWithFakePath(t, home)
+
+	claude1Home := filepath.Join(home, ".claude")
+	claude2Home := filepath.Join(home, ".claude-2")
+	codexHome := filepath.Join(home, ".codex")
+	os.MkdirAll(claude1Home, 0o755)
+	os.MkdirAll(claude2Home, 0o755)
+	os.MkdirAll(codexHome, 0o755)
+
+	if err := os.WriteFile(filepath.Join(claude1Home, ".claude.json"), []byte(`{"projects": {"/repo/a": {"hasTrustDialogAccepted": true}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(claude2Home, ".claude.json"), []byte(`{"projects": {"/repo/a": {"someKey": "keep"}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	registryPath := filepath.Join(home, "accounts.json")
+	writeRegistryTwoClaudeAccounts(t, registryPath, claude1Home, claude2Home, codexHome)
+
+	fakeFzf(t, home, key("accounts"), key("trust"), key("claude-1"), key("confirm"), key("back"), key("chat"), key("claude-1"))
+	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
+	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
+
+	stdout, stderr, err := runMenu(t, registryPath, home, "")
+	if err != nil {
+		t.Fatalf("menu run failed: %v\nstderr: %s", err, stderr)
+	}
+	if !strings.Contains(stdout, "已補上") || !strings.Contains(stdout, "原設定已備份到") {
+		t.Fatalf("expected a report naming what was filled and the backup, got: %s", stdout)
+	}
+	raw, err := os.ReadFile(filepath.Join(claude2Home, ".claude.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "hasTrustDialogAccepted") {
+		t.Fatalf("expected the target's .claude.json to gain the missing field, got: %s", raw)
+	}
+	if !strings.Contains(string(raw), "keep") {
+		t.Fatalf("expected the target's existing project key to survive, got: %s", raw)
+	}
+}
+
+// A codex source must be refused before any file is touched, with no
+// confirmation step offered.
+func TestManageAccountsTrustRefusesCodexSourceWithoutTouchingFiles(t *testing.T) {
+	home := t.TempDir()
+	runWithFakePath(t, home)
+
+	claudeHome := filepath.Join(home, ".claude")
+	codexHome := filepath.Join(home, ".codex")
+	os.MkdirAll(claudeHome, 0o755)
+	os.MkdirAll(codexHome, 0o755)
+	claudeJSON := `{"projects": {"/repo/a": {"hasTrustDialogAccepted": true}}}`
+	if err := os.WriteFile(filepath.Join(claudeHome, ".claude.json"), []byte(claudeJSON), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	registryPath := filepath.Join(home, "accounts.json")
+	writeRegistry(t, registryPath, claudeHome, codexHome)
+
+	fakeFzf(t, home, key("accounts"), key("trust"), key("codex-1"), key("back"), key("chat"), key("claude-1"))
+	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
+	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
+
+	stdout, stderr, err := runMenu(t, registryPath, home, "")
+	if err != nil {
+		t.Fatalf("menu run failed: %v\nstderr: %s", err, stderr)
+	}
+	if !strings.Contains(stdout, "只有 Claude 帳號") {
+		t.Fatalf("expected a refusal explaining only claude accounts have this state, got: %s", stdout)
+	}
+	raw, err := os.ReadFile(filepath.Join(claudeHome, ".claude.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(raw) != claudeJSON {
+		t.Fatal("a refused trust sync modified the claude account's .claude.json")
+	}
+	entries, err := os.ReadDir(claudeHome)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.Contains(e.Name(), ".bak-") {
+			t.Fatalf("expected no backup file, found %s", e.Name())
+		}
+	}
+}

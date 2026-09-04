@@ -141,6 +141,7 @@ ccs h 019fcb8e
 - 匯入既有帳號目錄：只匯入你明確選擇的候選。
 - 設定用量資料目錄：見下面「查看用量」一節，設定後存在 registry 裡，不用每次都帶 `--usage-dir`。留空即清除設定，改用預設路徑。
 - 狀態列設定：見下面「查看用量」一節「讓 status line 寫入 snapshot」小節。
+- 同步專案信任到其他帳號：見下面「同步專案信任到其他帳號」一節。
 
 ### 共用設定
 
@@ -156,6 +157,16 @@ ccs h 019fcb8e
 來源帳號沒有的項目就沒有東西可共用，會跳過。目錄項目連結的是整個目錄，不是逐檔比對。
 
 `plugins/` 共用後，每個 plugin 在所有帳號只會有一個安裝版本（裝在哪個帳號都一樣）。Claude Code 對這個目錄裡的安裝記錄沒有跨程序鎖，兩個帳號同時安裝或更新 plugin 時，後寫入的會蓋掉前一個的記錄；同一時間只在一個 session 裡裝 plugin 就不會碰到。
+
+### 同步專案信任到其他帳號
+
+`.claude.json` 存放每個專案的信任與權限狀態（是否已通過信任對話框、`allowedTools`、MCP 伺服器允許清單等），但這份檔案跟帳號身分（`oauthAccount`、`userID`）、上線狀態與逐 session 統計資料是同一份，沒辦法像 `settings.json` 那樣用 symlink 共用——共用了身分也等於共用了登入。
+
+`帳號設定 > 同步專案信任到其他帳號` 改用「合併」而不是連結：選一個來源帳號，把它 `.claude.json` 裡下列白名單欄位，逐專案補進其他每個 Claude 帳號缺的地方——`hasTrustDialogAccepted`、`allowedTools`、`enabledMcpjsonServers`、`disabledMcpjsonServers`、`mcpContextUris`、`hasClaudeMdExternalIncludesApproved`。只補目標沒有的，既有值（包含明確的 `false`／`[]`／`{}`）一律不覆蓋，白名單以外的欄位、其他專案、與帳號身分完全不碰。
+
+這是一次性的合併，不是即時連結：來源帳號之後又信任了新專案，要再跑一次才會補到其他帳號。
+
+寫入前一樣先備份成 `.claude.json.bak-<時間>`。目標帳號還沒執行過 Claude Code（沒有 `.claude.json`）或正有 session 在跑（`.claude.json.lock` 存在）時會略過該帳號並回報原因，不會建立檔案或搶寫。**跑之前請先關閉目標帳號的 Claude Code session**，否則它結束時寫回的內容會把這次合併蓋掉。
 
 憑證都不在共用的那些項目裡，所以共用設定不會讓帳號互相踩到登入狀態。
 
