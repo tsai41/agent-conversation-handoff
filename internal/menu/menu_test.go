@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -12,6 +13,28 @@ import (
 
 	"github.com/tsai41/agent-conversation-handoff/internal/registry"
 )
+
+// captureStdout runs f with os.Stdout redirected to a pipe and returns
+// everything it wrote. offerSharedSettings and shareAllAccountSettings print
+// directly to os.Stdout rather than returning their report, so this is the
+// only way to observe what they told the user.
+func captureStdout(t *testing.T, f func()) string {
+	t.Helper()
+	real := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.Stdout = w
+	f()
+	w.Close()
+	os.Stdout = real
+	out, err := io.ReadAll(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(out)
+}
 
 func writeScript(t *testing.T, path, content string) {
 	t.Helper()
@@ -442,5 +465,36 @@ func TestAddingAnAccountEndsInThePlainCLINotTheLoginSubcommand(t *testing.T) {
 	}
 	if _, err := registry.FindAccount(r, "claude-2"); err != nil {
 		t.Fatalf("expected the new account to be registered: %v", err)
+	}
+}
+
+// A bare source account has nothing to share, which is not the same thing
+// as every account already sharing settings -- the summary must say so
+// distinctly rather than claiming sharing that never happened.
+func TestShareAllAccountSettingsReportsABareSourceDistinctly(t *testing.T) {
+	home := t.TempDir()
+	claude1 := filepath.Join(home, "claude-1")
+	claude2 := filepath.Join(home, "claude-2")
+	if err := os.MkdirAll(claude1, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(claude2, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	r := registry.Registry{Accounts: []registry.Account{
+		{ID: "claude-1", Provider: "claude", Number: 1, Home: claude1},
+		{ID: "claude-2", Provider: "claude", Number: 2, Home: claude2},
+	}}
+
+	out := captureStdout(t, func() { shareAllAccountSettings(r) })
+
+	if strings.Contains(out, "所有帳號都已經在共用設定了") {
+		t.Fatalf("expected a bare source not to be reported as already shared, got: %s", out)
+	}
+	if !strings.Contains(out, "沒有可共用的設定") {
+		t.Fatalf("expected a message naming the bare source, got: %s", out)
+	}
+	if _, err := os.Lstat(filepath.Join(claude2, "settings.json")); !os.IsNotExist(err) {
+		t.Fatal("expected nothing to have been linked from a bare source")
 	}
 }

@@ -597,6 +597,10 @@ func shareAllAccountSettings(r registry.Registry) {
 	labels := accountLabels(r)
 	candidates := 0
 	reported := false
+	// examined is true once some entry actually had a source to compare
+	// against, distinguishing "every entry already shared" from "the source
+	// had nothing to share in the first place".
+	examined := false
 	for _, account := range r.Accounts {
 		source, found := registry.PrimaryAccount(r, account.Provider)
 		if !found || source.ID == account.ID {
@@ -610,6 +614,10 @@ func shareAllAccountSettings(r registry.Registry) {
 			continue
 		}
 		for _, share := range shares {
+			if share.SourceMissing {
+				continue
+			}
+			examined = true
 			// Named before the error is handled: an entry moved aside by a
 			// share that then failed is exactly the one nobody must lose.
 			if share.Backup != "" {
@@ -630,8 +638,12 @@ func shareAllAccountSettings(r registry.Registry) {
 	switch {
 	case candidates == 0:
 		fmt.Println("沒有可以共用設定的對象。")
-	case !reported:
+	case reported:
+		return
+	case examined:
 		fmt.Println("所有帳號都已經在共用設定了。")
+	default:
+		fmt.Println("來源帳號沒有可共用的設定，未進行任何共用。")
 	}
 }
 
