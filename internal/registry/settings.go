@@ -9,11 +9,7 @@ import (
 	"time"
 )
 
-// EntryKind distinguishes a shared file from a shared directory. A plain
-// file sitting where a shared directory belongs, or a directory sitting
-// where a shared file belongs, is refused the same way a foreign symlink
-// is -- whoever put it there did so on purpose, and moving it aside would
-// describe the wrong thing to the user.
+// EntryKind distinguishes a shared file from a shared directory.
 type EntryKind int
 
 const (
@@ -75,7 +71,9 @@ const (
 	// somebody else's arrangement, which sharing must not overrule.
 	EntryForeign
 	// EntryWrongKind is a file where a shared directory belongs, or a
-	// directory where a shared file belongs.
+	// directory where a shared file belongs -- refused the same way a
+	// foreign symlink is: whoever put it there did so on purpose, and
+	// moving it aside would describe the wrong thing to the user.
 	EntryWrongKind
 )
 
@@ -349,7 +347,6 @@ func entryState(sourcePath, targetPath string, kind EntryKind) (EntryState, erro
 	if err != nil {
 		return EntryUnexamined, err
 	}
-	// A relative link is relative to the directory holding it.
 	if !filepath.IsAbs(link) {
 		link = filepath.Join(filepath.Dir(targetPath), link)
 	}
@@ -362,11 +359,15 @@ func entryState(sourcePath, targetPath string, kind EntryKind) (EntryState, erro
 // sameFile asks the filesystem whether two paths are one file, rather than
 // comparing the strings. Path comparison misses every route that does not
 // change the spelling: a case-insensitive volume, a macOS firmlink, a hard
-// link. Getting this wrong is not a missed optimisation -- the caller
-// renames one path and symlinks the other, so two spellings of one file
-// means destroying it.
+// link. Getting this wrong either way risks losing or destroying an
+// account's document.
 //
-// It fails to false, which callers turn into a refusal rather than a write.
+// It answers false whenever it cannot prove the paths are one file,
+// including when Stat fails on either one -- that is "not proven same", not
+// "proven different". Only entryState's caller treats false as a reason to
+// refuse (a foreign link); the other two callers proceed on false, and rely
+// on the paths in question having already been stat'd successfully earlier
+// in the same call.
 func sameFile(a, b string) bool {
 	if filepath.Clean(a) == filepath.Clean(b) {
 		return true
