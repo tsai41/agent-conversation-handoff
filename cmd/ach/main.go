@@ -90,7 +90,17 @@ func main() {
 		registryPath := fs.String("registry", defaultRegistryPath(), "")
 		usageDir := fs.String("usage-dir", defaultUsageDir(), "")
 		fs.Parse(args)
-		if err := menu.Run(*registryPath, *usageDir); err != nil {
+		// fs.Visit only calls back for flags actually set on the command
+		// line, which is how "the user passed --usage-dir" is told apart
+		// from "the user passed nothing" even though usageDir's *string
+		// already holds the default value in both cases.
+		usageDirSet := false
+		fs.Visit(func(f *flag.Flag) {
+			if f.Name == "usage-dir" {
+				usageDirSet = true
+			}
+		})
+		if err := menu.Run(*registryPath, *usageDir, usageDirSet); err != nil {
 			fail(err)
 		}
 

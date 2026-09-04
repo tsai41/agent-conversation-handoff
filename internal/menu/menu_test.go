@@ -129,13 +129,26 @@ func runMenu(t *testing.T, registryPath, dir, stdin string) (string, string, err
 	return runMenuWithUsageDir(t, registryPath, "", dir, stdin)
 }
 
-// runMenuWithUsageDir is runMenu with a usage snapshot directory, for tests
-// that drive the "查看用量" view.
+// runMenuWithUsageDir is runMenu with an explicit usage snapshot directory
+// (as if --usage-dir were passed on the command line), for tests that drive
+// the "查看用量" view.
 func runMenuWithUsageDir(t *testing.T, registryPath, usageDir, dir, stdin string) (string, string, error) {
+	t.Helper()
+	return runMenuWithUsageDirFlag(t, registryPath, usageDir, true, dir, stdin)
+}
+
+// runMenuWithUsageDirFlag is runMenuWithUsageDir with control over whether
+// --usage-dir counts as explicitly passed, for tests exercising the
+// flag-vs-stored-setting precedence through the full menu loop.
+func runMenuWithUsageDirFlag(t *testing.T, registryPath, usageDir string, usageDirExplicit bool, dir, stdin string) (string, string, error) {
 	t.Helper()
 	cmd := exec.Command(os.Args[0], "-test.run=TestHelperRunMenu")
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "GO_WANT_HELPER_MENU_PROCESS=1", "ACH_TEST_REGISTRY="+registryPath, "ACH_TEST_USAGE_DIR="+usageDir)
+	env := append(os.Environ(), "GO_WANT_HELPER_MENU_PROCESS=1", "ACH_TEST_REGISTRY="+registryPath, "ACH_TEST_USAGE_DIR="+usageDir)
+	if !usageDirExplicit {
+		env = append(env, "ACH_TEST_USAGE_DIR_EXPLICIT=0")
+	}
+	cmd.Env = env
 	cmd.Stdin = strings.NewReader(stdin)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -150,7 +163,8 @@ func TestHelperRunMenu(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_MENU_PROCESS") != "1" {
 		return
 	}
-	if err := Run(os.Getenv("ACH_TEST_REGISTRY"), os.Getenv("ACH_TEST_USAGE_DIR")); err != nil {
+	usageDirExplicit := os.Getenv("ACH_TEST_USAGE_DIR_EXPLICIT") != "0"
+	if err := Run(os.Getenv("ACH_TEST_REGISTRY"), os.Getenv("ACH_TEST_USAGE_DIR"), usageDirExplicit); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -265,6 +279,9 @@ func TestUsageViewPrintsAndReturnsToTheMenu(t *testing.T) {
 	if strings.Contains(stdout, "0%") {
 		t.Fatalf("expected no window to render as 0%%, got: %s", stdout)
 	}
+	if !strings.Contains(stdout, usageDir) {
+		t.Fatalf("expected the view to state which directory it read, got: %s", stdout)
+	}
 
 	// The loop must have come back to the root picker for a second pick
 	// ("chat") rather than exiting after printing the table.
@@ -310,6 +327,9 @@ func TestUsageViewWithNoSnapshotDirectoryShowsNoDataForEveryAccount(t *testing.T
 	}
 	if !strings.Contains(stdout, "status line") {
 		t.Fatalf("expected a hint that usage data comes from the status line program, got: %s", stdout)
+	}
+	if strings.Count(stdout, usageDir) != 1 {
+		t.Fatalf("expected the directory to be named exactly once (the reading-from line, not repeated by the no-data hint too), got: %s", stdout)
 	}
 	if _, err := os.Stat(filepath.Join(calls, "rows-1")); err != nil {
 		t.Fatalf("expected a second root-level pick after the usage view, got: %v", err)
@@ -734,5 +754,123 @@ func TestOfferSharedSettingsCountsAlreadySharedEntriesInTheTotal(t *testing.T) {
 	}
 	if strings.Contains(out, "1/2 個項目") {
 		t.Fatalf("expected the old under-reporting fraction not to appear, got: %s", out)
+	}
+}
+
+func TestResolveUsageDirPrefersExplicitFlagOverStored(t *testing.T) {
+	dir := t.TempDir()
+	registryPath := filepath.Join(dir, "accounts.json")
+	if _, err := registry.SetUsageDir(registryPath, filepath.Join(dir, "stored-usage")); err != nil {
+		t.Fatal(err)
+	}
+
+	flagValue := filepath.Join(dir, "flag-usage")
+	if got := resolveUsageDir(registryPath, flagValue, true); got != flagValue {
+		t.Fatalf("expected an explicit flag to win over the stored setting, got %q", got)
+	}
+}
+
+func TestResolveUsageDirUsesStoredValueWhenNoFlagPassed(t *testing.T) {
+	dir := t.TempDir()
+	registryPath := filepath.Join(dir, "accounts.json")
+	stored := filepath.Join(dir, "stored-usage")
+	if _, err := registry.SetUsageDir(registryPath, stored); err != nil {
+		t.Fatal(err)
+	}
+
+	builtinDefault := filepath.Join(dir, "builtin-default")
+	if got := resolveUsageDir(registryPath, builtinDefault, false); got != stored {
+		t.Fatalf("expected the stored setting to be used when the flag was not explicit, got %q", got)
+	}
+}
+
+func TestResolveUsageDirFallsBackToBuiltinDefaultWhenNothingStored(t *testing.T) {
+	dir := t.TempDir()
+	registryPath := filepath.Join(dir, "accounts.json")
+	builtinDefault := filepath.Join(dir, "builtin-default")
+
+	if got := resolveUsageDir(registryPath, builtinDefault, false); got != builtinDefault {
+		t.Fatalf("expected the built-in default when nothing is stored, got %q", got)
+	}
+}
+
+// Setting the usage directory from 帳號設定 must persist to the registry and
+// tell the user what it is now set to, without breaking the numbered
+// shortcuts around it (the picker still offers "back" and reaches "chat").
+func TestManageAccountsSetsUsageDirectoryAndReportsIt(t *testing.T) {
+	home := t.TempDir()
+	runWithFakePath(t, home)
+
+	claudeHome := filepath.Join(home, ".claude")
+	codexHome := filepath.Join(home, ".codex")
+	os.MkdirAll(claudeHome, 0o755)
+	os.MkdirAll(codexHome, 0o755)
+
+	registryPath := filepath.Join(home, "accounts.json")
+	writeRegistry(t, registryPath, claudeHome, codexHome)
+
+	customUsageDir := filepath.Join(home, "custom-usage")
+
+	calls := fakeFzf(t, home, key("accounts"), key("usage-dir"), key("back"), key("chat"), key("claude-1"))
+	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
+	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
+
+	stdout, stderr, err := runMenu(t, registryPath, home, customUsageDir+"\n")
+	if err != nil {
+		t.Fatalf("menu run failed: %v\nstderr: %s", err, stderr)
+	}
+
+	actions := callFile(t, calls, "rows-1")
+	if !strings.Contains(actions, "設定用量資料目錄") {
+		t.Fatalf("expected 帳號設定 to offer setting the usage directory, got: %s", actions)
+	}
+	if !strings.Contains(stdout, customUsageDir) {
+		t.Fatalf("expected the new directory to be reported back, got: %s", stdout)
+	}
+
+	updated, err := registry.Load(registryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.UsageDir != customUsageDir {
+		t.Fatalf("expected the registry to store %q, got %q", customUsageDir, updated.UsageDir)
+	}
+}
+
+// An empty input at the usage-directory prompt clears a previously stored
+// setting rather than storing an empty path.
+func TestManageAccountsClearsUsageDirectoryOnEmptyInput(t *testing.T) {
+	home := t.TempDir()
+	runWithFakePath(t, home)
+
+	claudeHome := filepath.Join(home, ".claude")
+	codexHome := filepath.Join(home, ".codex")
+	os.MkdirAll(claudeHome, 0o755)
+	os.MkdirAll(codexHome, 0o755)
+
+	registryPath := filepath.Join(home, "accounts.json")
+	writeRegistry(t, registryPath, claudeHome, codexHome)
+	if _, err := registry.SetUsageDir(registryPath, filepath.Join(home, "already-stored")); err != nil {
+		t.Fatal(err)
+	}
+
+	fakeFzf(t, home, key("accounts"), key("usage-dir"), key("back"), key("chat"), key("claude-1"))
+	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
+	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
+
+	stdout, stderr, err := runMenu(t, registryPath, home, "\n")
+	if err != nil {
+		t.Fatalf("menu run failed: %v\nstderr: %s", err, stderr)
+	}
+	if !strings.Contains(stdout, "已清除") {
+		t.Fatalf("expected a message confirming the setting was cleared, got: %s", stdout)
+	}
+
+	updated, err := registry.Load(registryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.UsageDir != "" {
+		t.Fatalf("expected an empty input to clear the stored directory, got %q", updated.UsageDir)
 	}
 }

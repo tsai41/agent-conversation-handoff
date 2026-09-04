@@ -665,6 +665,7 @@ func manageAccounts(registryPath string) error {
 			{"share", "共用設定到所有帳號"},
 			{"remove", "從 ccs 移除帳號"},
 			{"import", "匯入既有帳號目錄"},
+			{"usage-dir", "設定用量資料目錄"},
 			{"back", "返回主選單"},
 		}
 		action, err := pickKey(actions, crumbs, "選擇動作: ", true)
@@ -803,6 +804,17 @@ func manageAccounts(registryPath string) error {
 					return err
 				}
 			}
+		case "usage-dir":
+			input := readOptionalAlias(actionCrumbs, "新的用量資料目錄（留空即清除，改用預設路徑）: ")
+			resolved, err := registry.SetUsageDir(registryPath, input)
+			if err != nil {
+				return err
+			}
+			if resolved == "" {
+				fmt.Println("用量資料目錄已清除，將使用預設路徑。")
+			} else {
+				fmt.Printf("用量資料目錄已設定為：%s\n", resolved)
+			}
 		}
 	}
 }
@@ -857,17 +869,37 @@ func showUsage(registryPath, usageDir string) error {
 	matches := usage.MatchLatest(r.Accounts, snapshots)
 	rows := usage.BuildRows(registry.Rows(r), matches, time.Now())
 	usage.Fprint(os.Stdout, rows)
+	fmt.Printf("資料來源目錄：%s\n", usageDir)
 	if len(matches) == 0 {
-		fmt.Printf("目前沒有任何帳號的用量資料：這份資料由 status line 程式寫入 %s，需要在該程式啟用寫入才會出現。\n", usageDir)
+		fmt.Println("目前沒有任何帳號的用量資料：這份資料由 status line 程式寫入該目錄，需要在該程式啟用寫入才會出現。")
 	}
 	return nil
+}
+
+// resolveUsageDir applies flag > stored setting > built-in default
+// precedence for the usage view's snapshot directory. flagValue already
+// carries the built-in default whenever flagExplicit is false, so falling
+// back to it covers both "no stored setting" and "registry unreadable".
+func resolveUsageDir(registryPath, flagValue string, flagExplicit bool) string {
+	if flagExplicit {
+		return flagValue
+	}
+	if r, err := registry.LoadOrEmpty(registryPath); err == nil && r.UsageDir != "" {
+		return r.UsageDir
+	}
+	return flagValue
 }
 
 // Run drives the top-level menu loop until an account is launched (which
 // execs and never returns) or the handoff flow returns. Backing out of a
 // second-level picker lands back here rather than quitting, so a wrong turn
 // costs one ESC instead of a restart.
-func Run(registryPath, usageDir string) error {
+//
+// usageDirFlag and usageDirFlagExplicit are --usage-dir as parsed by the
+// caller; the usage view re-resolves the effective directory on every visit
+// (see resolveUsageDir) so a directory set from 帳號設定 during this same
+// run takes effect immediately, without a restart.
+func Run(registryPath, usageDirFlag string, usageDirFlagExplicit bool) error {
 	if _, err := os.Stat(registryPath); os.IsNotExist(err) {
 		if err := bootstrapRegistry(registryPath); err != nil {
 			return err
@@ -912,6 +944,7 @@ func Run(registryPath, usageDir string) error {
 				return err
 			}
 		case "usage":
+			usageDir := resolveUsageDir(registryPath, usageDirFlag, usageDirFlagExplicit)
 			if err := showUsage(registryPath, usageDir); err != nil {
 				return err
 			}
