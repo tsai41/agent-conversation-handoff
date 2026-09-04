@@ -542,9 +542,10 @@ func chooseRegisteredAccount(r registry.Registry, crumbs, prompt string) (string
 }
 
 // offerSharedSettings asks whether a brand-new account should read the same
-// settings document as the first account of its provider. Declining leaves
-// an empty home, which is a real choice, so this asks rather than decides.
-// A failure to link is reported and stepped over; the login matters more.
+// settings as the first account of its provider. Declining leaves an empty
+// home, which is a real choice, so this asks rather than decides. Each
+// shared entry is reported on its own; one entry failing to link does not
+// hide the others, and the login matters more than any of them.
 func offerSharedSettings(r registry.Registry, account registry.Account, crumbs string) {
 	source, found := registry.PrimaryAccount(r, account.Provider)
 	if !found || source.ID == account.ID {
@@ -558,20 +559,34 @@ func offerSharedSettings(r registry.Registry, account registry.Account, crumbs s
 	if err != nil || choice != "share" {
 		return
 	}
-	share, err := registry.ShareSettings(source, account, false)
+	shares, err := registry.ShareSettings(source, account, false)
 	if err != nil {
 		fmt.Printf("提醒: 未能共用「%s」的設定: %s\n", labels[source.ID], err)
 		return
 	}
-	if share.Linked {
+	linked := false
+	for _, share := range shares {
+		if share.Err != nil {
+			fmt.Printf("提醒: 未能共用 %s: %s\n", share.Name, share.Err)
+			continue
+		}
+		if share.Backup != "" {
+			fmt.Printf("%s 原本的版本已備份到 %s\n", share.Name, share.Backup)
+		}
+		if share.Linked {
+			linked = true
+		}
+	}
+	if linked {
 		fmt.Printf("設定已共用自「%s」。\n", labels[source.ID])
 	}
 }
 
-// shareAllAccountSettings relinks every account onto the first account of
-// its provider. Unlike account creation this replaces a document the
-// account already has, so the original is moved aside and named rather than
-// assumed unwanted.
+// shareAllAccountSettings relinks every account's shared entries onto the
+// first account of its provider. Unlike account creation this replaces an
+// entry the account already has, so the original is moved aside and named
+// rather than assumed unwanted. Entries link independently: one refused or
+// failed entry is reported without stopping the rest.
 func shareAllAccountSettings(r registry.Registry) {
 	labels := accountLabels(r)
 	candidates := 0
@@ -582,21 +597,28 @@ func shareAllAccountSettings(r registry.Registry) {
 			continue
 		}
 		candidates++
-		share, err := registry.ShareSettings(source, account, true)
-		// Named before the error is handled: a document moved aside by a
-		// share that then failed is exactly the one nobody must lose.
-		if share.Backup != "" {
-			fmt.Printf("%s: 原設定已備份到 %s\n", labels[account.ID], share.Backup)
-			reported = true
-		}
+		shares, err := registry.ShareSettings(source, account, true)
 		if err != nil {
 			fmt.Printf("%s: 未共用: %s\n", labels[account.ID], err)
 			reported = true
 			continue
 		}
-		if share.Linked {
-			fmt.Printf("%s: 已改為共用「%s」的設定\n", labels[account.ID], labels[source.ID])
-			reported = true
+		for _, share := range shares {
+			// Named before the error is handled: an entry moved aside by a
+			// share that then failed is exactly the one nobody must lose.
+			if share.Backup != "" {
+				fmt.Printf("%s: %s 原本的版本已備份到 %s\n", labels[account.ID], share.Name, share.Backup)
+				reported = true
+			}
+			if share.Err != nil {
+				fmt.Printf("%s: %s 未共用: %s\n", labels[account.ID], share.Name, share.Err)
+				reported = true
+				continue
+			}
+			if share.Linked {
+				fmt.Printf("%s: %s 已改為共用「%s」的版本\n", labels[account.ID], share.Name, labels[source.ID])
+				reported = true
+			}
 		}
 	}
 	switch {
