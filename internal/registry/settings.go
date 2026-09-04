@@ -143,6 +143,9 @@ func ShareSettings(source, target Account, replace bool) ([]EntryShare, error) {
 	if len(sharedEntries[target.Provider]) == 0 {
 		return nil, fmt.Errorf("provider has nothing known to share: %s", target.Provider)
 	}
+	if source.Provider != target.Provider {
+		return nil, fmt.Errorf("%s is %s and %s is %s: sharing requires the same provider", source.ID, source.Provider, target.ID, target.Provider)
+	}
 	// Compare the homes and not just the ids: two registry entries can
 	// name one physical directory, and linking an entry to itself destroys
 	// it while looking like success.

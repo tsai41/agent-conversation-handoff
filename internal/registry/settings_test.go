@@ -234,6 +234,34 @@ func TestShareSettingsRefusesAnAccountSharingWithItself(t *testing.T) {
 	}
 }
 
+// Each provider's entries were checked for existence independently, with
+// nothing requiring the two providers to match. A claude source paired with
+// a codex target passed both checks and would have symlinked claude's files
+// into the codex home.
+func TestShareSettingsRefusesAProviderMismatch(t *testing.T) {
+	dir := t.TempDir()
+	claudeHome := filepath.Join(dir, "claude")
+	codexHome := filepath.Join(dir, "codex")
+	if err := os.MkdirAll(claudeHome, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(codexHome, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	source := account("claude-1", "claude", claudeHome, 1)
+	target := account("codex-1", "codex", codexHome, 1)
+	if err := os.WriteFile(docPath(source), []byte(`{"a":1}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := ShareSettings(source, target, true); err == nil {
+		t.Fatal("expected sharing to refuse a provider mismatch")
+	}
+	if _, err := os.Lstat(filepath.Join(codexHome, "settings.json")); !os.IsNotExist(err) {
+		t.Fatal("expected nothing to be linked into the mismatched target")
+	}
+}
+
 // Only the source's provider was checked for a known settings table; a
 // target on a provider with nothing to share would otherwise have every
 // entry linked into it regardless.
