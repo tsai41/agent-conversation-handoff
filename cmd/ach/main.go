@@ -25,6 +25,17 @@ func defaultRegistryPath() string {
 	return filepath.Join(home, ".config", "agent-conversation-handoff", "accounts.json")
 }
 
+func defaultUsageDir() string {
+	if dir := os.Getenv("ACH_CONFIG_DIR"); dir != "" {
+		return filepath.Join(dir, "usage")
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		home = "."
+	}
+	return filepath.Join(home, ".config", "agent-conversation-handoff", "usage")
+}
+
 func fail(err error) {
 	fmt.Fprintf(os.Stderr, "Error: %s\n", err)
 	os.Exit(1)
@@ -77,8 +88,9 @@ func main() {
 	case "menu":
 		fs := flag.NewFlagSet("menu", flag.ExitOnError)
 		registryPath := fs.String("registry", defaultRegistryPath(), "")
+		usageDir := fs.String("usage-dir", defaultUsageDir(), "")
 		fs.Parse(args)
-		if err := menu.Run(*registryPath); err != nil {
+		if err := menu.Run(*registryPath, *usageDir); err != nil {
 			fail(err)
 		}
 

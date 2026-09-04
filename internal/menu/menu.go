@@ -11,11 +11,13 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/tsai41/agent-conversation-handoff/internal/handoff"
 	"github.com/tsai41/agent-conversation-handoff/internal/provider"
 	"github.com/tsai41/agent-conversation-handoff/internal/registry"
 	"github.com/tsai41/agent-conversation-handoff/internal/session"
+	"github.com/tsai41/agent-conversation-handoff/internal/usage"
 )
 
 type kv struct{ Key, Label string }
@@ -36,6 +38,7 @@ const (
 	crumbTarget   = "選擇目標 Agent"
 	crumbAccounts = "帳號設定"
 	crumbSetup    = "初次設定"
+	crumbUsage    = "查看用量"
 )
 
 // breadcrumb renders the path bar shown above every picker, so which level
@@ -833,11 +836,31 @@ func launchAccount(registryPath string) error {
 	return provider.LaunchSession(account)
 }
 
+// showUsage prints every registered account's Claude quota from whatever
+// snapshot files a separate program has already written to usageDir. It
+// never queries an API, never touches credentials, and never launches a
+// session -- it only reads files that are already there.
+func showUsage(registryPath, usageDir string) error {
+	showCrumbs(breadcrumb(crumbUsage))
+	r, err := registry.Load(registryPath)
+	if err != nil {
+		return err
+	}
+	snapshots, err := usage.LoadDir(usageDir)
+	if err != nil {
+		return err
+	}
+	matches := usage.MatchLatest(r.Accounts, snapshots)
+	rows := usage.BuildRows(registry.Rows(r), matches, time.Now())
+	usage.Fprint(os.Stdout, rows)
+	return nil
+}
+
 // Run drives the top-level menu loop until an account is launched (which
 // execs and never returns) or the handoff flow returns. Backing out of a
 // second-level picker lands back here rather than quitting, so a wrong turn
 // costs one ESC instead of a restart.
-func Run(registryPath string) error {
+func Run(registryPath, usageDir string) error {
 	if _, err := os.Stat(registryPath); os.IsNotExist(err) {
 		if err := bootstrapRegistry(registryPath); err != nil {
 			return err
@@ -848,6 +871,7 @@ func Run(registryPath string) error {
 			{"chat", crumbChat},
 			{"handoff", crumbHandoff},
 			{"accounts", crumbAccounts},
+			{"usage", crumbUsage},
 		}, breadcrumb(), "選擇功能: ", true)
 		if err != nil {
 			return err
@@ -878,6 +902,10 @@ func Run(registryPath string) error {
 				if errors.Is(err, errCancelled) {
 					continue
 				}
+				return err
+			}
+		case "usage":
+			if err := showUsage(registryPath, usageDir); err != nil {
 				return err
 			}
 		}

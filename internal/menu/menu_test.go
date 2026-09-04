@@ -126,9 +126,16 @@ func writeRegistry(t *testing.T, path, claudeHome, codexHome string) {
 // provider CLI and never returns, so it cannot run in the test process.
 func runMenu(t *testing.T, registryPath, dir, stdin string) (string, string, error) {
 	t.Helper()
+	return runMenuWithUsageDir(t, registryPath, "", dir, stdin)
+}
+
+// runMenuWithUsageDir is runMenu with a usage snapshot directory, for tests
+// that drive the "查看用量" view.
+func runMenuWithUsageDir(t *testing.T, registryPath, usageDir, dir, stdin string) (string, string, error) {
+	t.Helper()
 	cmd := exec.Command(os.Args[0], "-test.run=TestHelperRunMenu")
 	cmd.Dir = dir
-	cmd.Env = append(os.Environ(), "GO_WANT_HELPER_MENU_PROCESS=1", "ACH_TEST_REGISTRY="+registryPath)
+	cmd.Env = append(os.Environ(), "GO_WANT_HELPER_MENU_PROCESS=1", "ACH_TEST_REGISTRY="+registryPath, "ACH_TEST_USAGE_DIR="+usageDir)
 	cmd.Stdin = strings.NewReader(stdin)
 	var stdout, stderr bytes.Buffer
 	cmd.Stdout = &stdout
@@ -143,7 +150,7 @@ func TestHelperRunMenu(t *testing.T) {
 	if os.Getenv("GO_WANT_HELPER_MENU_PROCESS") != "1" {
 		return
 	}
-	if err := Run(os.Getenv("ACH_TEST_REGISTRY")); err != nil {
+	if err := Run(os.Getenv("ACH_TEST_REGISTRY"), os.Getenv("ACH_TEST_USAGE_DIR")); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
@@ -216,6 +223,60 @@ func TestRunPicksAFunctionBeforeAnAccountAndRestoresRealStdin(t *testing.T) {
 // used even though it matches nothing in the list. The picker only lists
 // the current project's conversations, and here the project has none --
 // the conversation was recorded elsewhere, under the other account.
+// Selecting 查看用量 must print the table and land back at the root
+// picker rather than exiting, since the view only reads files and launches
+// nothing.
+func TestUsageViewPrintsAndReturnsToTheMenu(t *testing.T) {
+	home := t.TempDir()
+	runWithFakePath(t, home)
+
+	claudeHome := filepath.Join(home, ".claude")
+	codexHome := filepath.Join(home, ".codex")
+	os.MkdirAll(claudeHome, 0o755)
+	os.MkdirAll(codexHome, 0o755)
+
+	registryPath := filepath.Join(home, "accounts.json")
+	writeRegistry(t, registryPath, claudeHome, codexHome)
+
+	usageDir := filepath.Join(home, "usage")
+	os.MkdirAll(usageDir, 0o755)
+	resolvedClaudeHome, err := filepath.EvalSymlinks(claudeHome)
+	if err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(usageDir, "snapshot.json"), []byte(fmt.Sprintf(`{
+		"version": 1,
+		"config_dir": %q,
+		"checked_at": "2026-09-04T07:12:33Z",
+		"five_hour": {"used_percentage": 55.0}
+	}`, resolvedClaudeHome)), 0o644)
+
+	calls := fakeFzf(t, home, key("usage"), key("chat"), key("claude-1"))
+	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
+	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
+
+	stdout, stderr, err := runMenuWithUsageDir(t, registryPath, usageDir, home, "\n")
+	if err != nil {
+		t.Fatalf("menu run failed: %v\nstderr: %s", err, stderr)
+	}
+
+	if !strings.Contains(stdout, "Claude") || !strings.Contains(stdout, "55%") {
+		t.Fatalf("expected the usage table to list Claude's matched snapshot, got: %s", stdout)
+	}
+	if !strings.Contains(stdout, "Codex") {
+		t.Fatalf("expected an unmatched account to still be listed, got: %s", stdout)
+	}
+	if strings.Contains(stdout, "0%") {
+		t.Fatalf("expected no window to render as 0%%, got: %s", stdout)
+	}
+
+	// The loop must have come back to the root picker for a second pick
+	// ("chat") rather than exiting after printing the table.
+	if _, err := os.Stat(filepath.Join(calls, "rows-1")); err != nil {
+		t.Fatalf("expected a second root-level pick after the usage view, got: %v", err)
+	}
+}
+
 func TestHandoffUsesAnIDTypedIntoTheSearchBox(t *testing.T) {
 	home := t.TempDir()
 	runWithFakePath(t, home)
