@@ -28,6 +28,11 @@ type Registry struct {
 	Version    int            `json:"version"`
 	NextNumber map[string]int `json:"next_number"`
 	Accounts   []Account      `json:"accounts"`
+	// UsageDir is the usage view's snapshot directory, set from the menu's
+	// account-settings action. Empty means the caller's built-in default
+	// applies; a registry saved before this field existed loads the same
+	// way, so no schema version bump is needed for it.
+	UsageDir string `json:"usage_dir,omitempty"`
 }
 
 func Empty() Registry {
@@ -293,6 +298,30 @@ func RenameAccount(path string, accountID string, alias string) error {
 		}
 		return Save(path, r)
 	})
+}
+
+// SetUsageDir persists usageDir as the registry's usage-view directory,
+// expanding a leading ~ the same way an account home is resolved, and
+// returns the value actually stored. An empty usageDir clears the setting.
+func SetUsageDir(path string, usageDir string) (string, error) {
+	var resolved string
+	err := WithLock(path, func() error {
+		r, err := LoadOrEmpty(path)
+		if err != nil {
+			return err
+		}
+		if usageDir == "" {
+			r.UsageDir = ""
+			return Save(path, r)
+		}
+		resolved, err = resolveHome(usageDir)
+		if err != nil {
+			return err
+		}
+		r.UsageDir = resolved
+		return Save(path, r)
+	})
+	return resolved, err
 }
 
 // DiscoveredAccount is a candidate account home found by Discover.

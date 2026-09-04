@@ -1,6 +1,7 @@
 package registry
 
 import (
+	"os"
 	"path/filepath"
 	"testing"
 )
@@ -159,5 +160,80 @@ func TestWithLockSerializesConcurrentUpdates(t *testing.T) {
 	}
 	if r.NextNumber["codex"] != n+1 {
 		t.Fatalf("expected next_number.codex=%d, got %d", n+1, r.NextNumber["codex"])
+	}
+}
+
+// A registry document written before usage_dir existed must still load, with
+// the field read back as empty -- "use the caller's built-in default".
+func TestRegistryWithoutUsageDirFieldStillLoadsWithEmptyDefault(t *testing.T) {
+	dir := t.TempDir()
+	registryPath := filepath.Join(dir, "accounts.json")
+	content := `{
+		"version": 1,
+		"next_number": {"claude": 1, "codex": 1},
+		"accounts": []
+	}`
+	if err := os.WriteFile(registryPath, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := Load(registryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.UsageDir != "" {
+		t.Fatalf("expected UsageDir to default to empty, got %q", r.UsageDir)
+	}
+}
+
+func TestSetUsageDirClearsOnEmptyInput(t *testing.T) {
+	dir := t.TempDir()
+	registryPath := filepath.Join(dir, "accounts.json")
+	usageDir := filepath.Join(dir, "usage")
+
+	if _, err := SetUsageDir(registryPath, usageDir); err != nil {
+		t.Fatal(err)
+	}
+	r, err := Load(registryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.UsageDir != usageDir {
+		t.Fatalf("expected UsageDir to be set to %q, got %q", usageDir, r.UsageDir)
+	}
+
+	resolved, err := SetUsageDir(registryPath, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resolved != "" {
+		t.Fatalf("expected an empty input to report a cleared setting, got %q", resolved)
+	}
+	r, err = Load(registryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.UsageDir != "" {
+		t.Fatalf("expected UsageDir to be cleared, got %q", r.UsageDir)
+	}
+}
+
+func TestUsageDirSurvivesSaveLoadRoundTrip(t *testing.T) {
+	dir := t.TempDir()
+	registryPath := filepath.Join(dir, "accounts.json")
+	usageDir := filepath.Join(dir, "usage")
+
+	r := Empty()
+	r.UsageDir = usageDir
+	if err := Save(registryPath, r); err != nil {
+		t.Fatal(err)
+	}
+
+	loaded, err := Load(registryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if loaded.UsageDir != usageDir {
+		t.Fatalf("expected UsageDir %q to survive a save/load round trip, got %q", usageDir, loaded.UsageDir)
 	}
 }
