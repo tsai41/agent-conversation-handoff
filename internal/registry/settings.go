@@ -36,6 +36,10 @@ var sharedEntries = map[string][]SettingsEntry{
 		{Name: "skills", Kind: EntryDir},
 		{Name: "commands", Kind: EntryDir},
 		{Name: "agents", Kind: EntryDir},
+		// One plugin store means one installed version per plugin for every
+		// account, and Claude Code takes no lock on it: two accounts
+		// installing at once leave only the last writer's record.
+		{Name: "plugins", Kind: EntryDir},
 	},
 	"codex": {
 		{Name: "config.toml", Kind: EntryFile},

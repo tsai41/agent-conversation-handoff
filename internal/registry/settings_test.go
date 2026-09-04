@@ -666,7 +666,7 @@ func TestShareSettingsLinksOneEntryWhileOthersHaveNothingToShare(t *testing.T) {
 	if !settings.Linked || settings.Err != nil {
 		t.Fatalf("expected settings.json to link despite the other entries having nothing to share, got %+v", settings)
 	}
-	for _, name := range []string{"settings.local.json", "skills", "commands", "agents"} {
+	for _, name := range []string{"settings.local.json", "skills", "commands", "agents", "plugins"} {
 		share := entryNamed(t, shares, name)
 		if !share.SourceMissing || share.Err != nil || share.Linked {
 			t.Fatalf("expected %q to be reported as missing at the source, got %+v", name, share)

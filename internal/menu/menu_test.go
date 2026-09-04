@@ -723,14 +723,14 @@ func TestOfferSharedSettingsCountsAlreadySharedEntriesInTheTotal(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	for _, name := range []string{"skills", "commands", "agents"} {
+	for _, name := range []string{"skills", "commands", "agents", "plugins"} {
 		if err := os.MkdirAll(filepath.Join(sourceHome, name, "x"), 0o755); err != nil {
 			t.Fatal(err)
 		}
 	}
-	// settings.local.json, skills and commands already point at the source,
-	// as a previous share would have left them.
-	for _, name := range []string{"settings.local.json", "skills", "commands"} {
+	// settings.local.json, skills, commands and plugins already point at
+	// the source, as a previous share would have left them.
+	for _, name := range []string{"settings.local.json", "skills", "commands", "plugins"} {
 		if err := os.Symlink(filepath.Join(sourceHome, name), filepath.Join(targetHome, name)); err != nil {
 			t.Fatal(err)
 		}
@@ -749,8 +749,8 @@ func TestOfferSharedSettingsCountsAlreadySharedEntriesInTheTotal(t *testing.T) {
 
 	out := captureStdout(t, func() { offerSharedSettings(r, target, "") })
 
-	if !strings.Contains(out, "4/5 個項目") {
-		t.Fatalf("expected the summary to count all five entries, got: %s", out)
+	if !strings.Contains(out, "5/6 個項目") {
+		t.Fatalf("expected the summary to count all six entries, got: %s", out)
 	}
 	if strings.Contains(out, "1/2 個項目") {
 		t.Fatalf("expected the old under-reporting fraction not to appear, got: %s", out)

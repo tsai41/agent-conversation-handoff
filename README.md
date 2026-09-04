@@ -150,10 +150,12 @@ ccs h 019fcb8e
 
 | provider | 共用的項目 | 不共用（各帳號獨立） |
 |---|---|---|
-| Claude | `settings.json`、`settings.local.json`、`skills/`、`commands/`、`agents/` | `.credentials.json`、`.claude.json`、Keychain、`plugins/`、`projects/`、`sessions/` |
+| Claude | `settings.json`、`settings.local.json`、`skills/`、`commands/`、`agents/`、`plugins/` | `.credentials.json`、`.claude.json`、Keychain、`projects/`、`sessions/` |
 | Codex | `config.toml`、`skills/` | `auth.json`、`sessions/` |
 
 來源帳號沒有的項目就沒有東西可共用，會跳過。目錄項目連結的是整個目錄，不是逐檔比對。
+
+`plugins/` 共用後，每個 plugin 在所有帳號只會有一個安裝版本（裝在哪個帳號都一樣）。Claude Code 對這個目錄裡的安裝記錄沒有跨程序鎖，兩個帳號同時安裝或更新 plugin 時，後寫入的會蓋掉前一個的記錄；同一時間只在一個 session 裡裝 plugin 就不會碰到。
 
 憑證都不在共用的那些項目裡，所以共用設定不會讓帳號互相踩到登入狀態。
 
