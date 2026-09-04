@@ -749,6 +749,40 @@ func TestShareSettingsKeepsTheBackupWhenSomethingClaimsTheTargetMeanwhile(t *tes
 	}
 }
 
+// The restore path's directory branch mirrors the file branch above: the
+// rename that moves the original skills directory aside succeeds, then the
+// symlink fails, and the directory must be put back the same way.
+func TestShareSettingsRestoresADirectoryWhenTheSymlinkFails(t *testing.T) {
+	source, target := homes(t, "claude", `{"a":1}`)
+	sourceSkills := filepath.Join(source.Home, "skills")
+	if err := os.MkdirAll(filepath.Join(sourceSkills, "go-test-style"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	targetSkills := filepath.Join(target.Home, "skills")
+	if err := os.MkdirAll(filepath.Join(targetSkills, "mine"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	original := symlinkFunc
+	symlinkFunc = func(string, string) error { return fmt.Errorf("simulated symlink failure") }
+	defer func() { symlinkFunc = original }()
+
+	shares, err := ShareSettings(source, target, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	share := entryNamed(t, shares, "skills")
+	if share.Err == nil || share.Linked {
+		t.Fatalf("expected the symlink failure to be reported and nothing linked, got %+v", share)
+	}
+	if share.Backup != "" {
+		t.Fatalf("expected the restored backup to be cleared from the result, got %s", share.Backup)
+	}
+	if _, err := os.Stat(filepath.Join(targetSkills, "mine")); err != nil {
+		t.Fatalf("the original directory was not restored: %v", err)
+	}
+}
+
 // renameEntry's directory bypass relies on rename(2) refusing a non-empty
 // destination and succeeding over an empty one; this pins that kernel
 // behaviour directly rather than trusting it silently.
