@@ -373,6 +373,13 @@ func entryState(sourcePath, targetPath string, kind EntryKind) (EntryState, erro
 // "proven different". Only entryState's caller treats false as a reason to
 // refuse (a foreign link); the other two callers proceed on false as the
 // ordinary case of two genuinely different paths.
+// SameFile is the exported form of sameFile, for callers outside this
+// package that need to match a path against an account's Home the same way
+// -- resolving symlinks and hard links rather than comparing spellings.
+func SameFile(a, b string) bool {
+	return sameFile(a, b)
+}
+
 func sameFile(a, b string) bool {
 	if filepath.Clean(a) == filepath.Clean(b) {
 		return true
