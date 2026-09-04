@@ -219,10 +219,6 @@ func TestRunPicksAFunctionBeforeAnAccountAndRestoresRealStdin(t *testing.T) {
 	}
 }
 
-// The whole point of --print-query: an id typed into the search box is
-// used even though it matches nothing in the list. The picker only lists
-// the current project's conversations, and here the project has none --
-// the conversation was recorded elsewhere, under the other account.
 // Selecting 查看用量 must print the table and land back at the root
 // picker rather than exiting, since the view only reads files and launches
 // nothing.
@@ -277,6 +273,132 @@ func TestUsageViewPrintsAndReturnsToTheMenu(t *testing.T) {
 	}
 }
 
+// TestUsageViewWithNoSnapshotDirectoryShowsNoDataForEveryAccount covers the
+// ordinary state before the writing program has ever run: the view must
+// still print a table and hand the menu back, not exit non-zero just
+// because usage data hasn't been configured yet.
+func TestUsageViewWithNoSnapshotDirectoryShowsNoDataForEveryAccount(t *testing.T) {
+	home := t.TempDir()
+	runWithFakePath(t, home)
+
+	claudeHome := filepath.Join(home, ".claude")
+	codexHome := filepath.Join(home, ".codex")
+	os.MkdirAll(claudeHome, 0o755)
+	os.MkdirAll(codexHome, 0o755)
+
+	registryPath := filepath.Join(home, "accounts.json")
+	writeRegistry(t, registryPath, claudeHome, codexHome)
+
+	usageDir := filepath.Join(home, "usage-not-created-yet")
+
+	calls := fakeFzf(t, home, key("usage"), key("chat"), key("claude-1"))
+	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
+	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
+
+	stdout, stderr, err := runMenuWithUsageDir(t, registryPath, usageDir, home, "\n")
+	if err != nil {
+		t.Fatalf("expected the menu to exit 0 with no usage directory at all, got: %v\nstderr: %s", err, stderr)
+	}
+	if !strings.Contains(stdout, "Claude") || !strings.Contains(stdout, "Codex") {
+		t.Fatalf("expected both accounts to be listed, got: %s", stdout)
+	}
+	if strings.Count(stdout, "沒有資料") < 2 {
+		t.Fatalf("expected every row to be marked as having no data, got: %s", stdout)
+	}
+	if strings.Contains(stdout, "0%") {
+		t.Fatalf("expected no window to render as 0%%, got: %s", stdout)
+	}
+	if !strings.Contains(stdout, "status line") {
+		t.Fatalf("expected a hint that usage data comes from the status line program, got: %s", stdout)
+	}
+	if _, err := os.Stat(filepath.Join(calls, "rows-1")); err != nil {
+		t.Fatalf("expected a second root-level pick after the usage view, got: %v", err)
+	}
+}
+
+// TestUsageViewWithAnEmptySnapshotDirectoryShowsNoDataForEveryAccount covers
+// a writing program that has been enabled but has not written anything for
+// these accounts yet -- an empty directory must read the same as no
+// directory at all, not as an error.
+func TestUsageViewWithAnEmptySnapshotDirectoryShowsNoDataForEveryAccount(t *testing.T) {
+	home := t.TempDir()
+	runWithFakePath(t, home)
+
+	claudeHome := filepath.Join(home, ".claude")
+	codexHome := filepath.Join(home, ".codex")
+	os.MkdirAll(claudeHome, 0o755)
+	os.MkdirAll(codexHome, 0o755)
+
+	registryPath := filepath.Join(home, "accounts.json")
+	writeRegistry(t, registryPath, claudeHome, codexHome)
+
+	usageDir := filepath.Join(home, "usage")
+	os.MkdirAll(usageDir, 0o755)
+
+	calls := fakeFzf(t, home, key("usage"), key("chat"), key("claude-1"))
+	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
+	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
+
+	stdout, stderr, err := runMenuWithUsageDir(t, registryPath, usageDir, home, "\n")
+	if err != nil {
+		t.Fatalf("expected the menu to exit 0 with an empty usage directory, got: %v\nstderr: %s", err, stderr)
+	}
+	if strings.Count(stdout, "沒有資料") < 2 {
+		t.Fatalf("expected every row to be marked as having no data, got: %s", stdout)
+	}
+	if !strings.Contains(stdout, "status line") {
+		t.Fatalf("expected a hint that usage data comes from the status line program, got: %s", stdout)
+	}
+	if _, err := os.Stat(filepath.Join(calls, "rows-1")); err != nil {
+		t.Fatalf("expected a second root-level pick after the usage view, got: %v", err)
+	}
+}
+
+// TestUsageViewSurvivesAnUnreadableSnapshotDirectory covers a usageDir that
+// os.ReadDir refuses for a reason other than not existing (here, the path
+// is a plain file). The old behavior propagated that error all the way out
+// of Run and exited the CLI with status 1; the view must instead report the
+// problem and still hand the menu back.
+func TestUsageViewSurvivesAnUnreadableSnapshotDirectory(t *testing.T) {
+	home := t.TempDir()
+	runWithFakePath(t, home)
+
+	claudeHome := filepath.Join(home, ".claude")
+	codexHome := filepath.Join(home, ".codex")
+	os.MkdirAll(claudeHome, 0o755)
+	os.MkdirAll(codexHome, 0o755)
+
+	registryPath := filepath.Join(home, "accounts.json")
+	writeRegistry(t, registryPath, claudeHome, codexHome)
+
+	// A plain file where a directory is expected makes os.ReadDir fail with
+	// something other than IsNotExist.
+	usageDir := filepath.Join(home, "usage-is-a-file")
+	os.WriteFile(usageDir, []byte("not a directory"), 0o644)
+
+	calls := fakeFzf(t, home, key("usage"), key("chat"), key("claude-1"))
+	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
+	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
+
+	stdout, stderr, err := runMenuWithUsageDir(t, registryPath, usageDir, home, "\n")
+	if err != nil {
+		t.Fatalf("expected the menu to survive an unreadable usage directory, got: %v\nstderr: %s", err, stderr)
+	}
+	if strings.Count(stdout, "沒有資料") < 2 {
+		t.Fatalf("expected every row to be marked as having no data, got: %s", stdout)
+	}
+	if !strings.Contains(stdout, usageDir) {
+		t.Fatalf("expected the unreadable directory's path to be named, got: %s", stdout)
+	}
+	if _, err := os.Stat(filepath.Join(calls, "rows-1")); err != nil {
+		t.Fatalf("expected a second root-level pick after the usage view, got: %v", err)
+	}
+}
+
+// The whole point of --print-query: an id typed into the search box is
+// used even though it matches nothing in the list. The picker only lists
+// the current project's conversations, and here the project has none --
+// the conversation was recorded elsewhere, under the other account.
 func TestHandoffUsesAnIDTypedIntoTheSearchBox(t *testing.T) {
 	home := t.TempDir()
 	runWithFakePath(t, home)

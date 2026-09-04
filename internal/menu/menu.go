@@ -839,7 +839,10 @@ func launchAccount(registryPath string) error {
 // showUsage prints every registered account's Claude quota from whatever
 // snapshot files a separate program has already written to usageDir. It
 // never queries an API, never touches credentials, and never launches a
-// session -- it only reads files that are already there.
+// session -- it only reads files that are already there. A usageDir that
+// cannot be read (no permission, or the path is not a directory) is
+// reported to the user rather than failing the view: every account still
+// gets a row, just with no data, and the menu comes back either way.
 func showUsage(registryPath, usageDir string) error {
 	showCrumbs(breadcrumb(crumbUsage))
 	r, err := registry.Load(registryPath)
@@ -848,11 +851,15 @@ func showUsage(registryPath, usageDir string) error {
 	}
 	snapshots, err := usage.LoadDir(usageDir)
 	if err != nil {
-		return err
+		fmt.Printf("無法讀取用量資料目錄 %s：%v（以下顯示為沒有資料）\n", usageDir, err)
+		snapshots = nil
 	}
 	matches := usage.MatchLatest(r.Accounts, snapshots)
 	rows := usage.BuildRows(registry.Rows(r), matches, time.Now())
 	usage.Fprint(os.Stdout, rows)
+	if len(matches) == 0 {
+		fmt.Printf("目前沒有任何帳號的用量資料：這份資料由 status line 程式寫入 %s，需要在該程式啟用寫入才會出現。\n", usageDir)
+	}
 	return nil
 }
 
