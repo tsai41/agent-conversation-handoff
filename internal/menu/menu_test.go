@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/tsai41/agent-conversation-handoff/internal/registry"
 )
 
 func writeScript(t *testing.T, path, content string) {
@@ -395,5 +397,50 @@ func TestQuickHandoffByIDFindsClaudeConversationAndLaunchesCodex(t *testing.T) {
 	}
 	if !strings.Contains(string(launchedContent), "transcript.md") {
 		t.Fatalf("expected codex to launch from the artifact, got %q", launchedContent)
+	}
+}
+
+// A new account's home has no onboarding state, so `claude auth login`
+// leaves the first interactive run asking to log in all over again. Adding
+// an account therefore ends in the plain CLI, where that one prompt is the
+// only login the user sees.
+func TestAddingAnAccountEndsInThePlainCLINotTheLoginSubcommand(t *testing.T) {
+	home := t.TempDir()
+	runWithFakePath(t, home)
+
+	claudeHome := filepath.Join(home, ".claude")
+	codexHome := filepath.Join(home, ".codex")
+	os.MkdirAll(claudeHome, 0o755)
+	os.MkdirAll(codexHome, 0o755)
+
+	registryPath := filepath.Join(home, "accounts.json")
+	writeRegistry(t, registryPath, claudeHome, codexHome)
+
+	fakeFzf(t, home,
+		key("accounts"), key("add"), key("claude"), key("confirm"), key("own"))
+	argvCapture := filepath.Join(home, "claude-argv")
+	writeScript(t, filepath.Join(home, "bin", "claude"),
+		fmt.Sprintf("#!/usr/bin/env bash\nprintf '%%s\\n' \"$0\" \"$@\" > %q\n", argvCapture))
+	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
+
+	if _, stderr, err := runMenu(t, registryPath, home, "\n"); err != nil {
+		t.Fatalf("menu run failed: %v\nstderr: %s", err, stderr)
+	}
+
+	raw, err := os.ReadFile(argvCapture)
+	if err != nil {
+		t.Fatalf("expected the menu to exec the claude CLI: %v", err)
+	}
+	argv := strings.Fields(string(raw))
+	if len(argv) != 1 {
+		t.Fatalf("expected the CLI to be launched with no arguments, got %v", argv)
+	}
+
+	r, err := registry.Load(registryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry.FindAccount(r, "claude-2"); err != nil {
+		t.Fatalf("expected the new account to be registered: %v", err)
 	}
 }

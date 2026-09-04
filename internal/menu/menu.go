@@ -663,7 +663,12 @@ func manageAccounts(registryPath string) error {
 				if updated, loadErr := registry.Load(registryPath); loadErr == nil {
 					offerSharedSettings(updated, account, actionCrumbs)
 				}
-				return provider.Login(account)
+				// The interactive CLI, not the login subcommand: a brand
+				// new account home has no onboarding state, so the CLI
+				// asks to log in on its first run whatever the login
+				// subcommand already stored. Logging in there is the same
+				// login, minus the second one.
+				return provider.LaunchSession(account)
 			}
 		case "share":
 			r, err := registry.Load(registryPath)
