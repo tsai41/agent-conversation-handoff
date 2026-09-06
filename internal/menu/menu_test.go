@@ -362,6 +362,9 @@ func TestUsageViewWithNoSnapshotDirectoryShowsNoDataForEveryAccount(t *testing.T
 	if !strings.Contains(stdout, "status line") {
 		t.Fatalf("expected a hint that usage data comes from the status line program, got: %s", stdout)
 	}
+	if !strings.Contains(stdout, crumbAccounts+" > "+crumbStatusline) {
+		t.Fatalf("expected the hint to name the menu path to enable it, got: %s", stdout)
+	}
 	if strings.Count(stdout, usageDir) != 1 {
 		t.Fatalf("expected the directory to be named exactly once (the reading-from line, not repeated by the no-data hint too), got: %s", stdout)
 	}

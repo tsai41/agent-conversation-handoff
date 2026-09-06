@@ -882,6 +882,12 @@ func manageAccounts(registryPath, usageDirFlag string, usageDirFlagExplicit bool
 			} else {
 				fmt.Printf("用量資料目錄已設定為：%s\n", resolved)
 			}
+			if r, loadErr := registry.Load(registryPath); loadErr == nil {
+				effectiveDir := resolveUsageDir(registryPath, usageDirFlag, usageDirFlagExplicit)
+				if info, infoErr := registry.ReadStatuslineInfo(r, effectiveDir); infoErr == nil && !info.Matches {
+					fmt.Printf("提醒：狀態列尚未對齊此目錄，請到「%s」設定。\n", crumbStatusline)
+				}
+			}
 		case "statusline":
 			usageDir := resolveUsageDir(registryPath, usageDirFlag, usageDirFlagExplicit)
 			if err := manageStatusline(registryPath, usageDir, actionCrumbs); err != nil {
@@ -1103,7 +1109,7 @@ func showUsage(registryPath, usageDir string) error {
 	usage.Fprint(os.Stdout, rows)
 	fmt.Printf("資料來源目錄：%s\n", usageDir)
 	if len(matches) == 0 {
-		fmt.Println("目前沒有任何帳號的用量資料：這份資料由 status line 程式寫入該目錄，需要在該程式啟用寫入才會出現。")
+		fmt.Printf("目前沒有任何帳號的用量資料：這份資料由 status line 程式寫入該目錄，請到「%s > %s」啟用寫入。\n", crumbAccounts, crumbStatusline)
 	}
 	return nil
 }
