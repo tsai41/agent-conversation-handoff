@@ -3,7 +3,6 @@
 package menu
 
 import (
-	"bufio"
 	"errors"
 	"fmt"
 	"os"
@@ -181,23 +180,38 @@ func pickSessionRow(candidates []session.Candidate, crumbs, prompt string) (stri
 	return path, nil
 }
 
-// stdinReader is shared: a fresh bufio.Reader per prompt would keep
-// whatever it read past the newline, losing later lines when input is piped
-// rather than typed.
-var stdinReader = bufio.NewReader(os.Stdin)
-
-func readLine(prompt string) string {
-	fmt.Print(prompt)
-	line, _ := stdinReader.ReadString('\n')
-	return strings.TrimSpace(line)
+// readLine takes free-text input through fzf's search box rather than
+// stdin directly, so ESC there cancels the same way it does in every other
+// picker. fzf runs over an empty candidate list with --print-query: exit 1
+// ("no match", the expected outcome with nothing to match) still carries
+// the typed query on stdout, including an empty one when Enter is pressed
+// on a blank prompt (how 留空即清除 clears a value). Any other exit is a
+// real cancellation. See pickSession's exit-code contract for the same
+// pattern with rows in play.
+func readLine(crumbs, prompt string) (string, error) {
+	showCrumbs(crumbs)
+	if _, err := exec.LookPath("fzf"); err != nil {
+		return "", fmt.Errorf("fzf is required")
+	}
+	args := []string{"--height=~15", "--border=none", "--print-query", "--prompt=" + prompt}
+	cmd := exec.Command("fzf", args...)
+	cmd.Stdin = strings.NewReader("")
+	out, err := cmd.Output()
+	if err != nil {
+		var exitErr *exec.ExitError
+		if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
+			return "", errCancelled
+		}
+	}
+	lines := strings.Split(strings.TrimRight(string(out), "\n"), "\n")
+	return strings.TrimSpace(lines[0]), nil
 }
 
-func readOptionalAlias(crumbs, prompt string) string {
-	showCrumbs(crumbs)
+func readOptionalAlias(crumbs, prompt string) (string, error) {
 	if prompt == "" {
 		prompt = "alias（選填）: "
 	}
-	return readLine(prompt)
+	return readLine(crumbs, prompt)
 }
 
 func providerCommand(providerName string) string {
@@ -556,7 +570,13 @@ func bootstrapRegistry(registryPath string) error {
 			return err
 		}
 		if choice == "import" {
-			alias := readOptionalAlias(crumbs, fmt.Sprintf("%s alias（選填）: ", providerName))
+			alias, err := readOptionalAlias(crumbs, fmt.Sprintf("%s alias（選填）: ", providerName))
+			if err != nil {
+				if errors.Is(err, errCancelled) {
+					continue
+				}
+				return err
+			}
 			if _, err := registry.Register(&r, candidate.Provider, candidate.Home, alias, false); err != nil {
 				return err
 			}
@@ -751,7 +771,13 @@ func manageAccounts(registryPath, usageDirFlag string, usageDirFlagExplicit bool
 				return err
 			}
 			if confirmation == "confirm" {
-				alias := readOptionalAlias(actionCrumbs, "")
+				alias, err := readOptionalAlias(actionCrumbs, "")
+				if err != nil {
+					if errors.Is(err, errCancelled) {
+						continue
+					}
+					return err
+				}
 				account, err := registry.AddAccount(registryPath, chosenProvider, accountHome, alias)
 				if err != nil {
 					return err
@@ -798,7 +824,13 @@ func manageAccounts(registryPath, usageDirFlag string, usageDirFlagExplicit bool
 				}
 				return err
 			}
-			alias := readOptionalAlias(actionCrumbs, "新的 alias（留空即清除）: ")
+			alias, err := readOptionalAlias(actionCrumbs, "新的 alias（留空即清除）: ")
+			if err != nil {
+				if errors.Is(err, errCancelled) {
+					continue
+				}
+				return err
+			}
 			if err := registry.RenameAccount(registryPath, accountID, alias); err != nil {
 				return err
 			}
@@ -840,7 +872,13 @@ func manageAccounts(registryPath, usageDirFlag string, usageDirFlagExplicit bool
 				return err
 			}
 			parts := strings.SplitN(selected, "|", 2)
-			alias := readOptionalAlias(actionCrumbs, "")
+			alias, err := readOptionalAlias(actionCrumbs, "")
+			if err != nil {
+				if errors.Is(err, errCancelled) {
+					continue
+				}
+				return err
+			}
 			if _, err := registry.AddAccount(registryPath, parts[0], parts[1], alias); err != nil {
 				return err
 			}
@@ -872,7 +910,13 @@ func manageAccounts(registryPath, usageDirFlag string, usageDirFlagExplicit bool
 				}
 			}
 		case "usage-dir":
-			input := readOptionalAlias(actionCrumbs, "新的用量資料目錄（留空即清除，改用預設路徑）: ")
+			input, err := readOptionalAlias(actionCrumbs, "新的用量資料目錄（留空即清除，改用預設路徑）: ")
+			if err != nil {
+				if errors.Is(err, errCancelled) {
+					continue
+				}
+				return err
+			}
 			resolved, err := registry.SetUsageDir(registryPath, input)
 			if err != nil {
 				return err

@@ -172,7 +172,11 @@ func TestHelperRunMenu(t *testing.T) {
 	}
 }
 
-func TestRunPicksAFunctionBeforeAnAccountAndRestoresRealStdin(t *testing.T) {
+// Free-text input (alias, usage-dir path) now goes through fzf rather than
+// os.Stdin, so nothing in the menu package reads real stdin ahead of an
+// account launch any more; this only confirms that launching an account
+// still hands the CLI process the real stdin untouched.
+func TestRunPicksAFunctionBeforeAnAccountThenPassesRealStdinToTheLaunchedCLI(t *testing.T) {
 	home := t.TempDir()
 	runWithFakePath(t, home)
 
@@ -747,13 +751,13 @@ func TestAddingAnAccountEndsInThePlainCLINotTheLoginSubcommand(t *testing.T) {
 	writeRegistry(t, registryPath, claudeHome, codexHome)
 
 	fakeFzf(t, home,
-		key("accounts"), key("add"), key("claude"), key("confirm"), key("own"))
+		key("accounts"), key("add"), key("claude"), key("confirm"), typed(""), key("own"))
 	argvCapture := filepath.Join(home, "claude-argv")
 	writeScript(t, filepath.Join(home, "bin", "claude"),
 		fmt.Sprintf("#!/usr/bin/env bash\nprintf '%%s\\n' \"$0\" \"$@\" > %q\n", argvCapture))
 	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
 
-	if _, stderr, err := runMenu(t, registryPath, home, "\n"); err != nil {
+	if _, stderr, err := runMenu(t, registryPath, home, ""); err != nil {
 		t.Fatalf("menu run failed: %v\nstderr: %s", err, stderr)
 	}
 
@@ -915,11 +919,11 @@ func TestManageAccountsSetsUsageDirectoryAndReportsIt(t *testing.T) {
 
 	customUsageDir := filepath.Join(home, "custom-usage")
 
-	calls := fakeFzf(t, home, key("accounts"), key("usage-dir"), key("back"), key("chat"), key("claude-1"))
+	calls := fakeFzf(t, home, key("accounts"), key("usage-dir"), typed(customUsageDir), key("back"), key("chat"), key("claude-1"))
 	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
 	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
 
-	stdout, stderr, err := runMenu(t, registryPath, home, customUsageDir+"\n")
+	stdout, stderr, err := runMenu(t, registryPath, home, "")
 	if err != nil {
 		t.Fatalf("menu run failed: %v\nstderr: %s", err, stderr)
 	}
@@ -958,11 +962,11 @@ func TestManageAccountsClearsUsageDirectoryOnEmptyInput(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fakeFzf(t, home, key("accounts"), key("usage-dir"), key("back"), key("chat"), key("claude-1"))
+	fakeFzf(t, home, key("accounts"), key("usage-dir"), typed(""), key("back"), key("chat"), key("claude-1"))
 	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
 	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
 
-	stdout, stderr, err := runMenu(t, registryPath, home, "\n")
+	stdout, stderr, err := runMenu(t, registryPath, home, "")
 	if err != nil {
 		t.Fatalf("menu run failed: %v\nstderr: %s", err, stderr)
 	}
