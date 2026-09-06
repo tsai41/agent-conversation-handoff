@@ -289,6 +289,10 @@ func chooseSourceAccount(r registry.Registry, labels map[string]string) (string,
 	return pickKey(candidates, breadcrumb(crumbHandoff, crumbSource), "來源帳號: ", true)
 }
 
+// interactiveRegistryHandoff is a three-step wizard (source agent ->
+// conversation -> target agent). Backing out of a step returns to the step
+// before it rather than the whole flow, except at the first step: ESC
+// there is the flow's own cancellation, propagated to the caller.
 func interactiveRegistryHandoff(registryPath, project string) error {
 	r, err := registry.Load(registryPath)
 	if err != nil {
@@ -296,37 +300,70 @@ func interactiveRegistryHandoff(registryPath, project string) error {
 	}
 	labels := accountLabels(r)
 
-	sourceID, err := chooseSourceAccount(r, labels)
-	if err != nil {
-		return err
-	}
-	source, err := registry.FindAccount(r, sourceID)
-	if err != nil {
-		return err
-	}
+	const (
+		stepSource = iota
+		stepSession
+		stepTarget
+	)
+	step := stepSource
+	var sourceID string
+	var sessions []session.Candidate
+	var sourceCrumb, sessionPath, typed string
 
-	// A source account whose conversations cannot be listed is not a dead
-	// end: a typed id still reaches every account.
-	sessions, err := sessionsForAccount(source, project)
-	if err != nil {
-		sessions = nil
-	}
+	for {
+		switch step {
+		case stepSource:
+			sourceID, err = chooseSourceAccount(r, labels)
+			if err != nil {
+				return err
+			}
+			source, err := registry.FindAccount(r, sourceID)
+			if err != nil {
+				return err
+			}
+			// A source account whose conversations cannot be listed is not a
+			// dead end: a typed id still reaches every account.
+			sessions, err = sessionsForAccount(source, project)
+			if err != nil {
+				sessions = nil
+			}
+			sourceCrumb = sourceAgentCrumb(labels[sourceID])
+			step = stepSession
 
-	sourceCrumb := sourceAgentCrumb(labels[sourceID])
-	crumbs := breadcrumb(crumbHandoff, sourceCrumb, crumbSession)
-	sessionPath, typed, err := pickSession(sessions, crumbs, "搜尋或輸入對話 ID: ")
-	if err != nil {
-		return err
-	}
-	if sessionPath == "" {
-		return manualIDHandoff(registryPath, r, labels, typed, project)
-	}
+		case stepSession:
+			crumbs := breadcrumb(crumbHandoff, sourceCrumb, crumbSession)
+			sessionPath, typed, err = pickSession(sessions, crumbs, "搜尋或輸入對話 ID: ")
+			if err != nil {
+				if errors.Is(err, errCancelled) {
+					step = stepSource
+					continue
+				}
+				return err
+			}
+			if sessionPath == "" {
+				if err := manualIDHandoff(registryPath, r, labels, typed, project); err != nil {
+					if errors.Is(err, errCancelled) {
+						step = stepSession
+						continue
+					}
+					return err
+				}
+				return nil
+			}
+			step = stepTarget
 
-	targetID, err := chooseTargetExcluding(r, labels, sourceID, breadcrumb(crumbHandoff, sourceCrumb, crumbTarget))
-	if err != nil {
-		return err
+		case stepTarget:
+			targetID, err := chooseTargetExcluding(r, labels, sourceID, breadcrumb(crumbHandoff, sourceCrumb, crumbTarget))
+			if err != nil {
+				if errors.Is(err, errCancelled) {
+					step = stepSession
+					continue
+				}
+				return err
+			}
+			return RegistryHandoff(registryPath, sourceID, targetID, sessionPath, project, true)
+		}
 	}
-	return RegistryHandoff(registryPath, sourceID, targetID, sessionPath, project, true)
 }
 
 // QuickHandoff finds a Claude conversation by id fragment and hands it to a
@@ -675,6 +712,9 @@ func manageAccounts(registryPath, usageDirFlag string, usageDirFlagExplicit bool
 		}
 		action, err := pickKey(actions, crumbs, "選擇動作: ", true)
 		if err != nil {
+			if errors.Is(err, errCancelled) {
+				return nil
+			}
 			return err
 		}
 		actionCrumbs := breadcrumb(crumbAccounts, labelOf(actions, action))
@@ -693,6 +733,9 @@ func manageAccounts(registryPath, usageDirFlag string, usageDirFlagExplicit bool
 			}
 			chosenProvider, err := pickKey(providers, actionCrumbs, "選擇 provider: ", true)
 			if err != nil {
+				if errors.Is(err, errCancelled) {
+					continue
+				}
 				return err
 			}
 			accountHome, err := registry.SuggestAccountHome(registryPath, chosenProvider)
@@ -704,6 +747,9 @@ func manageAccounts(registryPath, usageDirFlag string, usageDirFlagExplicit bool
 				{"cancel", "取消"},
 			}, actionCrumbs, "確認新增帳號: ", true)
 			if err != nil {
+				if errors.Is(err, errCancelled) {
+					continue
+				}
 				return err
 			}
 			if confirmation == "confirm" {
@@ -734,6 +780,9 @@ func manageAccounts(registryPath, usageDirFlag string, usageDirFlagExplicit bool
 				{"cancel", "取消"},
 			}, actionCrumbs, "確認共用設定: ", true)
 			if err != nil {
+				if errors.Is(err, errCancelled) {
+					continue
+				}
 				return err
 			}
 			if confirmation == "confirm" {
@@ -746,6 +795,9 @@ func manageAccounts(registryPath, usageDirFlag string, usageDirFlagExplicit bool
 			}
 			accountID, err := chooseRegisteredAccount(r, actionCrumbs, "選擇要修改 alias 的帳號: ")
 			if err != nil {
+				if errors.Is(err, errCancelled) {
+					continue
+				}
 				return err
 			}
 			alias := readOptionalAlias(actionCrumbs, "新的 alias（留空即清除）: ")
@@ -759,6 +811,9 @@ func manageAccounts(registryPath, usageDirFlag string, usageDirFlagExplicit bool
 			}
 			accountID, err := chooseRegisteredAccount(r, actionCrumbs, "選擇要登入的帳號: ")
 			if err != nil {
+				if errors.Is(err, errCancelled) {
+					continue
+				}
 				return err
 			}
 			account, err := registry.FindAccount(r, accountID)
@@ -781,6 +836,9 @@ func manageAccounts(registryPath, usageDirFlag string, usageDirFlagExplicit bool
 			}
 			selected, err := pickKey(options, actionCrumbs, "選擇要匯入的帳號目錄: ", true)
 			if err != nil {
+				if errors.Is(err, errCancelled) {
+					continue
+				}
 				return err
 			}
 			parts := strings.SplitN(selected, "|", 2)
@@ -795,6 +853,9 @@ func manageAccounts(registryPath, usageDirFlag string, usageDirFlagExplicit bool
 			}
 			accountID, err := chooseRegisteredAccount(r, actionCrumbs, "選擇要取消登記的帳號: ")
 			if err != nil {
+				if errors.Is(err, errCancelled) {
+					continue
+				}
 				return err
 			}
 			confirmation, err := pickKey([]kv{
@@ -802,6 +863,9 @@ func manageAccounts(registryPath, usageDirFlag string, usageDirFlagExplicit bool
 				{"cancel", "取消"},
 			}, actionCrumbs, "確認取消登記: ", true)
 			if err != nil {
+				if errors.Is(err, errCancelled) {
+					continue
+				}
 				return err
 			}
 			if confirmation == "confirm" {
@@ -823,10 +887,16 @@ func manageAccounts(registryPath, usageDirFlag string, usageDirFlagExplicit bool
 		case "statusline":
 			usageDir := resolveUsageDir(registryPath, usageDirFlag, usageDirFlagExplicit)
 			if err := manageStatusline(registryPath, usageDir, actionCrumbs); err != nil {
+				if errors.Is(err, errCancelled) {
+					continue
+				}
 				return err
 			}
 		case "trust":
 			if err := manageTrustSync(registryPath, actionCrumbs); err != nil {
+				if errors.Is(err, errCancelled) {
+					continue
+				}
 				return err
 			}
 		}

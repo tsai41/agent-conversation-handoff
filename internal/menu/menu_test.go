@@ -608,6 +608,72 @@ func TestHandoffPicksSourceThenConversationThenTarget(t *testing.T) {
 	}
 }
 
+// ESC on the conversation picker must return to the source-account picker,
+// not restart the wizard at the root menu.
+func TestHandoffEscAtSessionPickerReturnsToSourcePicker(t *testing.T) {
+	home := t.TempDir()
+	runWithFakePath(t, home)
+
+	claudeHome := filepath.Join(home, ".claude")
+	codexHome := filepath.Join(home, ".codex")
+	os.MkdirAll(claudeHome, 0o755)
+	os.MkdirAll(codexHome, 0o755)
+
+	registryPath := filepath.Join(home, "accounts.json")
+	writeRegistry(t, registryPath, claudeHome, codexHome)
+
+	calls := fakeFzf(t, home, key("handoff"), key("claude-1"), cancel())
+	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
+	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
+
+	if _, stderr, err := runMenu(t, registryPath, home, ""); err != nil {
+		t.Fatalf("menu run failed: %v\nstderr: %s", err, stderr)
+	}
+
+	sourceAgain := callFile(t, calls, "rows-3")
+	if !strings.Contains(sourceAgain, "1. Claude") || !strings.Contains(sourceAgain, "2. Codex") {
+		t.Fatalf("expected ESC at the session picker to return to the source picker, got: %s", sourceAgain)
+	}
+}
+
+// ESC on the target-account picker must return to the conversation picker,
+// not all the way back to the source picker.
+func TestHandoffEscAtTargetPickerReturnsToSessionPicker(t *testing.T) {
+	home := t.TempDir()
+	runWithFakePath(t, home)
+
+	project := filepath.Join(home, "project")
+	os.MkdirAll(project, 0o755)
+	claudeHome := filepath.Join(home, ".claude")
+	codexHome := filepath.Join(home, ".codex")
+	longUUID := "edcda8ee-19af-45ac-ad5d-206136874fdd"
+	resolvedProject, err := filepath.EvalSymlinks(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionDir := filepath.Join(claudeHome, "projects", strings.NewReplacer("/", "-", "_", "-").Replace(resolvedProject))
+	os.MkdirAll(sessionDir, 0o755)
+	os.MkdirAll(codexHome, 0o755)
+	sessionPath := filepath.Join(sessionDir, "source.jsonl")
+	os.WriteFile(sessionPath, []byte(fmt.Sprintf(`{"type":"user","sessionId":%q,"message":{"content":"continue this"}}`+"\n", longUUID)), 0o644)
+
+	registryPath := filepath.Join(home, "accounts.json")
+	writeRegistry(t, registryPath, claudeHome, codexHome)
+
+	calls := fakeFzf(t, home, key("handoff"), key("claude-1"), row(sessionPath), cancel())
+	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
+	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
+
+	if _, stderr, err := runMenu(t, registryPath, project, ""); err != nil {
+		t.Fatalf("menu run failed: %v\nstderr: %s", err, stderr)
+	}
+
+	sessionAgain := callFile(t, calls, "rows-4")
+	if !strings.Contains(sessionAgain, "edcda8ee…4fdd") {
+		t.Fatalf("expected ESC at the target picker to return to the session picker, got: %s", sessionAgain)
+	}
+}
+
 func TestQuickHandoffByIDFindsClaudeConversationAndLaunchesCodex(t *testing.T) {
 	home := t.TempDir()
 	runWithFakePath(t, home)
