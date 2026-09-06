@@ -24,7 +24,9 @@ type kv struct{ Key, Label string }
 
 // errCancelled marks a picker the user backed out of (ESC / CTRL-C) rather
 // than one that failed. It propagates uncaught to Run, which restarts at
-// the function level; only Run's own picker treats it as quitting.
+// the function level; Run's own root picker instead returns nil, so
+// backing out of the root menu exits the program cleanly instead of
+// erroring out.
 var errCancelled = errors.New("selection cancelled")
 
 // Breadcrumb segments for the levels below the root. Each level is named
@@ -1062,6 +1064,13 @@ func resolveUsageDir(registryPath, flagValue string, flagExplicit bool) string {
 func Run(registryPath, usageDirFlag string, usageDirFlagExplicit bool) error {
 	if _, err := os.Stat(registryPath); os.IsNotExist(err) {
 		if err := bootstrapRegistry(registryPath); err != nil {
+			// A cancelled bootstrap wrote no registry, so the menu below
+			// would fail on its first action; ending the run is the honest
+			// outcome, and the next start re-enters bootstrap.
+			if errors.Is(err, errCancelled) {
+				fmt.Println("已取消初次設定。")
+				return nil
+			}
 			return err
 		}
 	}
@@ -1071,11 +1080,17 @@ func Run(registryPath, usageDirFlag string, usageDirFlagExplicit bool) error {
 			{"handoff", crumbHandoff},
 			{"accounts", crumbAccounts},
 			{"usage", crumbUsage},
+			{"quit", "離開"},
 		}, breadcrumb(), "選擇功能: ", true)
 		if err != nil {
+			if errors.Is(err, errCancelled) {
+				return nil
+			}
 			return err
 		}
 		switch action {
+		case "quit":
+			return nil
 		case "chat":
 			if err := launchAccount(registryPath); err != nil {
 				if errors.Is(err, errCancelled) {

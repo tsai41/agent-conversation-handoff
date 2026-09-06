@@ -32,11 +32,16 @@ func TestBareInvocationDefaultsToMenu(t *testing.T) {
 	// A bare-invocation usage error would print "usage: ach ..." and
 	// exit before ever touching fzf/the registry. Reaching the menu's
 	// bootstrap flow (which calls our fake, cancelling fzf) proves the
-	// default routed through menu.Run instead.
-	if err == nil {
-		t.Fatal("expected a non-zero exit (fzf cancelled the bootstrap prompt)")
+	// default routed through menu.Run instead; a cancelled bootstrap is
+	// a normal exit, so the proof is the cancellation line, not the code.
+	if err != nil {
+		t.Fatalf("expected a clean exit after fzf cancelled the bootstrap prompt: %v\n%s", err, out)
 	}
-	if got := string(out); strings.Contains(got, "usage: ach") {
+	got := string(out)
+	if strings.Contains(got, "usage: ach") {
 		t.Fatalf("bare invocation hit the old usage error instead of defaulting to menu: %s", got)
+	}
+	if !strings.Contains(got, "已取消初次設定") {
+		t.Fatalf("expected the bootstrap cancellation line, got: %s", got)
 	}
 }

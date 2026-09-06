@@ -71,6 +71,8 @@ func typed(query string) reply { return reply{query + "\n", 1} }
 
 func key(k string) reply { return reply{k + "\n", 0} }
 
+func cancel() reply { return reply{"", 130} }
+
 // fakeFzf installs a stub fzf that replays one canned answer per call and
 // records the rows and argv of every call, so a whole menu path can be
 // driven and then inspected level by level.
@@ -230,6 +232,37 @@ func TestRunPicksAFunctionBeforeAnAccountAndRestoresRealStdin(t *testing.T) {
 	}
 	if string(seen) != "real-stdin-marker\n" {
 		t.Fatalf("expected claude to see real stdin, got %q", seen)
+	}
+}
+
+// ESC during first-run setup is a normal exit, not an error: nothing has
+// been written yet, so backing out must not surface as "Error: selection
+// cancelled" with a non-zero exit.
+func TestRunExitsCleanlyWhenBootstrapSetupIsCancelled(t *testing.T) {
+	home := t.TempDir()
+	runWithFakePath(t, home)
+	os.MkdirAll(filepath.Join(home, ".claude"), 0o755)
+
+	registryPath := filepath.Join(home, "accounts.json")
+	calls := fakeFzf(t, home, cancel(), key("chat"))
+
+	stdout, stderr, err := runMenu(t, registryPath, home, "")
+	if err != nil {
+		t.Fatalf("expected ESC during first-run setup to exit cleanly, got: %v\nstdout: %s\nstderr: %s", err, stdout, stderr)
+	}
+	if strings.Contains(stderr, "Error:") {
+		t.Fatalf("expected no Error: on stderr, got: %s", stderr)
+	}
+	if !strings.Contains(stdout, "已取消初次設定") {
+		t.Fatalf("expected a message confirming the cancelled setup, got: %s", stdout)
+	}
+	// With no registry written, the root menu would fail on its first
+	// action, so the run must end here instead of offering it.
+	if _, err := os.Stat(filepath.Join(calls, "rows-1")); err == nil {
+		t.Fatal("expected no root menu after a cancelled bootstrap")
+	}
+	if _, err := os.Stat(registryPath); err == nil {
+		t.Fatal("expected no registry file after a cancelled bootstrap")
 	}
 }
 
