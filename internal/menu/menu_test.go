@@ -172,6 +172,39 @@ func TestHelperRunMenu(t *testing.T) {
 	}
 }
 
+// runQuickHandoff drives QuickHandoff in a child process: it execs into the
+// (faked) provider CLI and never returns, so it cannot run in the test
+// process.
+func runQuickHandoff(t *testing.T, registryPath, fragment, project string) (string, string, error) {
+	t.Helper()
+	cmd := exec.Command(os.Args[0], "-test.run=TestHelperQuickHandoff")
+	cmd.Dir = project
+	cmd.Env = append(os.Environ(),
+		"GO_WANT_HELPER_QUICK_HANDOFF_PROCESS=1",
+		"ACH_TEST_REGISTRY="+registryPath,
+		"ACH_TEST_FRAGMENT="+fragment,
+		"ACH_TEST_PROJECT="+project,
+	)
+	var stdout, stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+	err := cmd.Run()
+	return stdout.String(), stderr.String(), err
+}
+
+// TestHelperQuickHandoff is not a real test; it is exec'd as a subprocess so
+// QuickHandoff's exec into the provider CLI doesn't replace the test binary.
+func TestHelperQuickHandoff(t *testing.T) {
+	if os.Getenv("GO_WANT_HELPER_QUICK_HANDOFF_PROCESS") != "1" {
+		return
+	}
+	err := QuickHandoff(os.Getenv("ACH_TEST_REGISTRY"), os.Getenv("ACH_TEST_FRAGMENT"), os.Getenv("ACH_TEST_PROJECT"))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+}
+
 // Free-text input (alias, usage-dir path) now goes through fzf rather than
 // os.Stdin, so nothing in the menu package reads real stdin ahead of an
 // account launch any more; this only confirms that launching an account
@@ -722,8 +755,8 @@ func TestQuickHandoffByIDFindsClaudeConversationAndLaunchesCodex(t *testing.T) {
 	))
 	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
 
-	if err := QuickHandoff(registryPath, "019fcb8e", project); err != nil {
-		t.Fatalf("quick handoff failed: %v", err)
+	if _, stderr, err := runQuickHandoff(t, registryPath, "019fcb8e", project); err != nil {
+		t.Fatalf("quick handoff failed: %v\nstderr: %s", err, stderr)
 	}
 	launchedContent, err := os.ReadFile(launched)
 	if err != nil {
