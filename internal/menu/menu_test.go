@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/tsai41/agent-conversation-handoff/internal/registry"
 )
@@ -325,12 +326,13 @@ func TestUsageViewPrintsAndReturnsToTheMenu(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	os.WriteFile(filepath.Join(usageDir, "snapshot.json"), []byte(fmt.Sprintf(`{
+	checkedAt := time.Now().Add(-time.Minute).UTC().Format(time.RFC3339)
+	os.WriteFile(filepath.Join(usageDir, "snapshot.json"), fmt.Appendf(nil, `{
 		"version": 1,
 		"config_dir": %q,
-		"checked_at": "2026-09-04T07:12:33Z",
+		"checked_at": %q,
 		"five_hour": {"used_percentage": 55.0}
-	}`, resolvedClaudeHome)), 0o644)
+	}`, resolvedClaudeHome, checkedAt), 0o644)
 
 	calls := fakeFzf(t, home, key("usage"), key("chat"), key("claude-1"))
 	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
