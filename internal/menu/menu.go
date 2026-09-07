@@ -53,6 +53,10 @@ func sourceAgentCrumb(label string) string {
 	return "來源 Agent：" + label
 }
 
+func sessionCountCrumb(crumbs string, count int) string {
+	return fmt.Sprintf("%s（目前顯示 %d 筆；最多 5 筆，其他對話可輸入 ID 搜尋）", crumbs, count)
+}
+
 // showCrumbs prints the path bar above a non-picker screen whose explanatory
 // text is intentionally kept in terminal scrollback.
 func showCrumbs(crumbs string) {
@@ -348,7 +352,7 @@ func interactiveRegistryHandoff(registryPath, project string) error {
 
 		case stepSession:
 			crumbs := breadcrumb(crumbHandoff, sourceCrumb, crumbSession)
-			sessionPath, typed, err = pickSession(sessions, crumbs, "搜尋或輸入對話 ID: ")
+			sessionPath, typed, err = pickSession(sessions, sessionCountCrumb(crumbs, len(sessions)), "搜尋或輸入對話 ID: ")
 			if err != nil {
 				if errors.Is(err, errCancelled) {
 					step = stepSource
