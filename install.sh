@@ -28,6 +28,12 @@ arm64) ASSET="ach-darwin-arm64" ;;
 esac
 
 mkdir -p "$BIN_DIR"
+tmpdir=$(mktemp -d "$BIN_DIR/.${COMMAND}.download.XXXXXX")
+trap 'rm -rf "$tmpdir"' EXIT
+gh release download --repo "$REPO" --pattern "$ASSET" --output "$tmpdir/$ASSET" --clobber
+gh release download --repo "$REPO" --pattern "SHA256SUMS" --output "$tmpdir/SHA256SUMS" --clobber
+(cd "$tmpdir" && shasum -a 256 -c SHA256SUMS)
+chmod +x "$tmpdir/$ASSET"
 
 if [ -e "$DEST" ] && [ ! -L "$DEST" ]; then
 	backup="$DEST.bak-$(date +%Y%m%d-%H%M%S)"
@@ -35,8 +41,7 @@ if [ -e "$DEST" ] && [ ! -L "$DEST" ]; then
 	echo "✓ 已備份舊指令 → $backup"
 fi
 
-gh release download --repo "$REPO" --pattern "$ASSET" --output "$DEST" --clobber
-chmod +x "$DEST"
+mv "$tmpdir/$ASSET" "$DEST"
 echo "✓ 已安裝 ${DEST}（${ASSET}，來自最新 GitHub Release）"
 
 case ":$PATH:" in

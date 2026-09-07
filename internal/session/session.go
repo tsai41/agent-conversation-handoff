@@ -105,7 +105,10 @@ func ClaudeCandidates(sourceHome, project string) ([]Candidate, error) {
 		return nil, fmt.Errorf("no Claude sessions for this project: %s", sessionDir)
 	}
 
-	matches, _ := filepath.Glob(filepath.Join(sessionDir, "*.jsonl"))
+	matches, err := claudeSessionPaths(sessionDir)
+	if err != nil {
+		return nil, err
+	}
 	type fileEntry struct {
 		path      string
 		startTime time.Time
@@ -145,7 +148,7 @@ func ClaudeCandidateList(sourceHome, project string) (CandidateList, error) {
 		return CandidateList{}, err
 	}
 	projectID := strings.NewReplacer("/", "-", "_", "-").Replace(absProject)
-	matches, err := filepath.Glob(filepath.Join(sourceHome, "projects", projectID, "*.jsonl"))
+	matches, err := claudeSessionPaths(filepath.Join(sourceHome, "projects", projectID))
 	if err != nil {
 		return CandidateList{}, err
 	}
@@ -156,6 +159,20 @@ func ClaudeCandidateList(sourceHome, project string) (CandidateList, error) {
 		}
 	}
 	return CandidateList{Candidates: candidates, Total: total}, nil
+}
+
+func claudeSessionPaths(sessionDir string) ([]string, error) {
+	entries, err := os.ReadDir(sessionDir)
+	if err != nil {
+		return nil, err
+	}
+	paths := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".jsonl") {
+			paths = append(paths, filepath.Join(sessionDir, entry.Name()))
+		}
+	}
+	return paths, nil
 }
 
 // claudeSessionStartTime returns the first "timestamp" field found in the

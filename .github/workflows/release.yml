@@ -21,10 +21,14 @@ jobs:
       - name: Build macOS binaries
         run: make build
 
+      - name: Generate checksums
+        run: (cd dist && sha256sum ach-darwin-arm64 ach-darwin-amd64 > SHA256SUMS)
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           files: |
             dist/ach-darwin-arm64
             dist/ach-darwin-amd64
+            dist/SHA256SUMS
           generate_release_notes: true

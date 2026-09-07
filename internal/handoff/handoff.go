@@ -116,7 +116,7 @@ func Create(sourcePath, targetPath string, sourceType string) (string, error) {
 	}
 	os.Chmod(ignoreFile, 0o600)
 
-	stamp := time.Now().UTC().Format("20060102T150405Z")
+	stamp := time.Now().UTC().Format("20060102T150405.000000000Z")
 	artifactName := fmt.Sprintf("%s-%s", stamp, sourceHash[:12])
 	destination := filepath.Join(artifactRoot, artifactName)
 	if _, err := os.Stat(destination); err == nil {
