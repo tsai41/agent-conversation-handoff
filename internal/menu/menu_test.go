@@ -246,8 +246,11 @@ func TestRunPicksAFunctionBeforeAnAccountThenPassesRealStdinToTheLaunchedCLI(t *
 	if !strings.Contains(argv, "--bind=1:pos(1)+accept,2:pos(2)+accept,3:pos(3)+accept") {
 		t.Fatalf("expected numbered bind flag, got argv: %s", argv)
 	}
-	if !strings.Contains(stdout, "主選單\n") {
-		t.Fatalf("expected the root path bar to be printed, got: %s", stdout)
+	if strings.Contains(stdout, "主選單") {
+		t.Fatalf("expected path bars not to remain in stdout, got: %s", stdout)
+	}
+	if !strings.Contains(argv, "--header=主選單") {
+		t.Fatalf("expected the root path bar in the picker, got argv: %s", argv)
 	}
 
 	// Level two offers the accounts, under a path bar naming the function.
@@ -257,10 +260,10 @@ func TestRunPicksAFunctionBeforeAnAccountThenPassesRealStdinToTheLaunchedCLI(t *
 			t.Fatalf("expected the account rows to contain %q, got: %s", want, accounts)
 		}
 	}
-	if !strings.Contains(stdout, "主選單 > 使用帳號對話\n") {
-		t.Fatalf("expected the second-level path bar to be printed, got: %s", stdout)
-	}
 	accountArgv := callFile(t, calls, "argv-1")
+	if !strings.Contains(accountArgv, "--header=主選單 > 使用帳號對話") {
+		t.Fatalf("expected the second-level path bar in the picker, got argv: %s", accountArgv)
+	}
 	if !strings.Contains(accountArgv, "--bind=1:pos(1)+accept") {
 		t.Fatalf("expected the account level to be numbered too, got argv: %s", accountArgv)
 	}
@@ -543,8 +546,8 @@ func TestHandoffUsesAnIDTypedIntoTheSearchBox(t *testing.T) {
 	if !strings.Contains(sessionArgv, "--print-query") {
 		t.Fatalf("expected the session picker to return its query, got argv: %s", sessionArgv)
 	}
-	if !strings.Contains(stdout, "主選單 > 接手對話 > 來源 Agent：Claude > 選擇來源對話\n") {
-		t.Fatalf("expected a path bar naming the source account to be printed, got: %s", stdout)
+	if !strings.Contains(sessionArgv, "--header=主選單 > 接手對話 > 來源 Agent：Claude > 選擇來源對話") {
+		t.Fatalf("expected a path bar naming the source account in the picker, got argv: %s", sessionArgv)
 	}
 	if rows := callFile(t, calls, "rows-2"); strings.Contains(rows, "輸入對話 ID") {
 		t.Fatalf("expected ids to be entered directly in the search box, got: %s", rows)
@@ -622,8 +625,8 @@ func TestHandoffPicksSourceThenConversationThenTarget(t *testing.T) {
 	if sources := callFile(t, calls, "rows-1"); !strings.Contains(sources, "1. Claude") {
 		t.Fatalf("expected a numbered source account level, got: %s", sources)
 	}
-	if !strings.Contains(stdout, "主選單 > 接手對話 > 選擇來源 Agent\n") {
-		t.Fatalf("expected the source picker path bar to be printed, got: %s", stdout)
+	if sourceArgv := callFile(t, calls, "argv-1"); !strings.Contains(sourceArgv, "--header=主選單 > 接手對話 > 選擇來源 Agent") {
+		t.Fatalf("expected the source picker path bar in the picker, got argv: %s", sourceArgv)
 	}
 	rows := callFile(t, calls, "rows-2")
 	if !strings.Contains(rows, "edcda8ee…4fdd") {
@@ -632,11 +635,14 @@ func TestHandoffPicksSourceThenConversationThenTarget(t *testing.T) {
 	if strings.Contains(rows, longUUID) {
 		t.Fatalf("full uuid leaked into session rows: %s", rows)
 	}
-	if !strings.Contains(stdout, "主選單 > 接手對話 > 來源 Agent：Claude > 選擇來源對話\n") {
-		t.Fatalf("expected the conversation picker path bar to be printed, got: %s", stdout)
+	if sessionArgv := callFile(t, calls, "argv-2"); !strings.Contains(sessionArgv, "--header=主選單 > 接手對話 > 來源 Agent：Claude > 選擇來源對話") {
+		t.Fatalf("expected the conversation picker path bar in the picker, got argv: %s", sessionArgv)
 	}
-	if !strings.Contains(stdout, "主選單 > 接手對話 > 來源 Agent：Claude > 選擇目標 Agent\n") {
-		t.Fatalf("expected the target picker path bar to be printed, got: %s", stdout)
+	if targetArgv := callFile(t, calls, "argv-3"); !strings.Contains(targetArgv, "--header=主選單 > 接手對話 > 來源 Agent：Claude > 選擇目標 Agent") {
+		t.Fatalf("expected the target picker path bar in the picker, got argv: %s", targetArgv)
+	}
+	if strings.Contains(stdout, "主選單") {
+		t.Fatalf("expected path bars not to remain in stdout, got: %s", stdout)
 	}
 
 	launchedContent, err := os.ReadFile(launched)
@@ -969,6 +975,13 @@ func TestManageAccountsSetsUsageDirectoryAndReportsIt(t *testing.T) {
 	}
 	if !strings.Contains(stdout, customUsageDir) {
 		t.Fatalf("expected the new directory to be reported back, got: %s", stdout)
+	}
+	if strings.Contains(stdout, "主選單 > 帳號設定 > 設定用量資料目錄") {
+		t.Fatalf("expected the input path bar not to remain in stdout, got: %s", stdout)
+	}
+	inputArgv := callFile(t, calls, "argv-2")
+	if !strings.Contains(inputArgv, "--header=主選單 > 帳號設定 > 設定用量資料目錄") {
+		t.Fatalf("expected the input path bar in the picker, got argv: %s", inputArgv)
 	}
 
 	updated, err := registry.Load(registryPath)

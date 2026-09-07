@@ -53,10 +53,8 @@ func sourceAgentCrumb(label string) string {
 	return "來源 Agent：" + label
 }
 
-// showCrumbs prints the path bar above a screen. pickKey and pickSession
-// call it themselves so the bar prints exactly once per picker; a caller
-// that already printed its own crumbs before calling one of them passes ""
-// through instead of printing it twice.
+// showCrumbs prints the path bar above a non-picker screen whose explanatory
+// text is intentionally kept in terminal scrollback.
 func showCrumbs(crumbs string) {
 	if crumbs != "" {
 		fmt.Println(crumbs)
@@ -79,7 +77,6 @@ func labelOf(candidates []kv, key string) string {
 // prefixed "1. ", "2. ", ... and fzf is given digit-key shortcuts
 // (pos(N)+accept) so a single keypress selects and accepts, up to 9 items.
 func pickKey(candidates []kv, crumbs, prompt string, numbered bool) (string, error) {
-	showCrumbs(crumbs)
 	if _, err := exec.LookPath("fzf"); err != nil {
 		return "", fmt.Errorf("fzf is required")
 	}
@@ -98,6 +95,9 @@ func pickKey(candidates []kv, crumbs, prompt string, numbered bool) (string, err
 		rows.WriteByte('\n')
 	}
 	args := []string{"--height=~15", "--border=none", "--with-nth=2..", "--delimiter=\t", "--prompt=" + prompt}
+	if crumbs != "" {
+		args = append(args, "--header="+crumbs)
+	}
 	if numbered {
 		shortcuts := len(candidates)
 		if shortcuts > 9 {
@@ -129,7 +129,6 @@ func pickKey(candidates []kv, crumbs, prompt string, numbered bool) (string, err
 // an id the user already knows is regularly absent from it. Such an id
 // comes back as the query, with an empty path.
 func pickSession(candidates []session.Candidate, crumbs, prompt string) (string, string, error) {
-	showCrumbs(crumbs)
 	if _, err := exec.LookPath("fzf"); err != nil {
 		return "", "", fmt.Errorf("fzf is required")
 	}
@@ -141,6 +140,9 @@ func pickSession(candidates []session.Candidate, crumbs, prompt string) (string,
 		rows.WriteByte('\n')
 	}
 	args := []string{"--height=~15", "--border=none", "--with-nth=2..", "--delimiter=\t", "--print-query", "--prompt=" + prompt}
+	if crumbs != "" {
+		args = append(args, "--header="+crumbs)
+	}
 	cmd := exec.Command("fzf", args...)
 	cmd.Stdin = strings.NewReader(rows.String())
 	out, err := cmd.Output()
@@ -189,11 +191,13 @@ func pickSessionRow(candidates []session.Candidate, crumbs, prompt string) (stri
 // real cancellation. See pickSession's exit-code contract for the same
 // pattern with rows in play.
 func readLine(crumbs, prompt string) (string, error) {
-	showCrumbs(crumbs)
 	if _, err := exec.LookPath("fzf"); err != nil {
 		return "", fmt.Errorf("fzf is required")
 	}
 	args := []string{"--height=~15", "--border=none", "--print-query", "--prompt=" + prompt}
+	if crumbs != "" {
+		args = append(args, "--header="+crumbs)
+	}
 	cmd := exec.Command("fzf", args...)
 	cmd.Stdin = strings.NewReader("")
 	out, err := cmd.Output()
