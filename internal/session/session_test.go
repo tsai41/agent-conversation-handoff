@@ -117,6 +117,34 @@ func TestClaudeCandidatesLimitsToFiveNewest(t *testing.T) {
 	}
 }
 
+func TestClaudeCandidateListReportsTotalBeforeApplyingDisplayLimit(t *testing.T) {
+	dir := t.TempDir()
+	project := filepath.Join(dir, "project")
+	if err := os.MkdirAll(project, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	claudeHome := filepath.Join(dir, ".claude")
+	projectID := strings.NewReplacer("/", "-", "_", "-").Replace(mustAbs(t, project))
+	sessionDir := filepath.Join(claudeHome, "projects", projectID)
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for day := 1; day <= 6; day++ {
+		content := fmt.Sprintf(`{"type":"user","sessionId":"session-%d","timestamp":"2026-07-%02dT09:00:00Z","message":{"content":"conversation %d"}}`+"\n", day, day, day)
+		if err := os.WriteFile(filepath.Join(sessionDir, fmt.Sprintf("session-%d.jsonl", day)), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	list, err := ClaudeCandidateList(claudeHome, project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if list.Total != 6 || len(list.Candidates) != 5 {
+		t.Fatalf("got total=%d displayed=%d, want total=6 displayed=5", list.Total, len(list.Candidates))
+	}
+}
+
 func TestCodexCandidatesFiltersByRecordedCwd(t *testing.T) {
 	dir := t.TempDir()
 	codexHome := filepath.Join(dir, ".codex")

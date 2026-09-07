@@ -546,8 +546,8 @@ func TestHandoffUsesAnIDTypedIntoTheSearchBox(t *testing.T) {
 	if !strings.Contains(sessionArgv, "--print-query") {
 		t.Fatalf("expected the session picker to return its query, got argv: %s", sessionArgv)
 	}
-	if !strings.Contains(sessionArgv, "--header=主選單 > 接手對話 > 來源 Agent：Claude > 選擇來源對話（目前顯示 0 筆；最多 5 筆，其他對話可輸入 ID 搜尋）") {
-		t.Fatalf("expected the empty-session count in the picker header, got argv: %s", sessionArgv)
+	if !strings.Contains(sessionArgv, "無法掃描：no Claude sessions for this project") || !strings.Contains(sessionArgv, "仍可輸入 ID 搜尋") {
+		t.Fatalf("expected the scan failure in the picker header, got argv: %s", sessionArgv)
 	}
 	if rows := callFile(t, calls, "rows-2"); strings.Contains(rows, "輸入對話 ID") {
 		t.Fatalf("expected ids to be entered directly in the search box, got: %s", rows)
@@ -635,7 +635,7 @@ func TestHandoffPicksSourceThenConversationThenTarget(t *testing.T) {
 	if strings.Contains(rows, longUUID) {
 		t.Fatalf("full uuid leaked into session rows: %s", rows)
 	}
-	if sessionArgv := callFile(t, calls, "argv-2"); !strings.Contains(sessionArgv, "--header=主選單 > 接手對話 > 來源 Agent：Claude > 選擇來源對話（目前顯示 1 筆；最多 5 筆，其他對話可輸入 ID 搜尋）") {
+	if sessionArgv := callFile(t, calls, "argv-2"); !strings.Contains(sessionArgv, "--header=主選單 > 接手對話 > 來源 Agent：Claude > 選擇來源對話（找到 1 筆，顯示最新 1 筆；其他對話可輸入 ID 搜尋）") {
 		t.Fatalf("expected the conversation count in the picker header, got argv: %s", sessionArgv)
 	}
 	if targetArgv := callFile(t, calls, "argv-3"); !strings.Contains(targetArgv, "--header=主選單 > 接手對話 > 來源 Agent：Claude > 選擇目標 Agent") {

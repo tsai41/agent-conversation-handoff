@@ -53,8 +53,8 @@ func sourceAgentCrumb(label string) string {
 	return "來源 Agent：" + label
 }
 
-func sessionCountCrumb(crumbs string, count int) string {
-	return fmt.Sprintf("%s（目前顯示 %d 筆；最多 5 筆，其他對話可輸入 ID 搜尋）", crumbs, count)
+func sessionCountCrumb(crumbs string, total, displayed int) string {
+	return fmt.Sprintf("%s（找到 %d 筆，顯示最新 %d 筆；其他對話可輸入 ID 搜尋）", crumbs, total, displayed)
 }
 
 // showCrumbs prints the path bar above a non-picker screen whose explanatory
@@ -234,11 +234,11 @@ func cliInstalled(account registry.Account) bool {
 	return err == nil
 }
 
-func sessionsForAccount(account registry.Account, project string) ([]session.Candidate, error) {
+func sessionsForAccount(account registry.Account, project string) (session.CandidateList, error) {
 	if account.Provider == "claude" {
-		return session.ClaudeCandidates(account.Home, project)
+		return session.ClaudeCandidateList(account.Home, project)
 	}
-	return session.CodexCandidates(account.Home, project)
+	return session.CodexCandidateList(account.Home, project)
 }
 
 func accountLabels(r registry.Registry) map[string]string {
@@ -328,6 +328,8 @@ func interactiveRegistryHandoff(registryPath, project string) error {
 	step := stepSource
 	var sourceID string
 	var sessions []session.Candidate
+	var sessionTotal int
+	var sessionScanErr error
 	var sourceCrumb, sessionPath, typed string
 
 	for {
@@ -343,16 +345,27 @@ func interactiveRegistryHandoff(registryPath, project string) error {
 			}
 			// A source account whose conversations cannot be listed is not a
 			// dead end: a typed id still reaches every account.
-			sessions, err = sessionsForAccount(source, project)
-			if err != nil {
+			listing, listErr := sessionsForAccount(source, project)
+			if listErr != nil {
 				sessions = nil
+				sessionTotal = 0
+				sessionScanErr = listErr
+			} else {
+				sessions = listing.Candidates
+				sessionTotal = listing.Total
+				sessionScanErr = nil
 			}
 			sourceCrumb = sourceAgentCrumb(labels[sourceID])
 			step = stepSession
 
 		case stepSession:
 			crumbs := breadcrumb(crumbHandoff, sourceCrumb, crumbSession)
-			sessionPath, typed, err = pickSession(sessions, sessionCountCrumb(crumbs, len(sessions)), "搜尋或輸入對話 ID: ")
+			if sessionScanErr != nil {
+				crumbs = fmt.Sprintf("%s（無法掃描：%v；仍可輸入 ID 搜尋）", crumbs, sessionScanErr)
+			} else {
+				crumbs = sessionCountCrumb(crumbs, sessionTotal, len(sessions))
+			}
+			sessionPath, typed, err = pickSession(sessions, crumbs, "搜尋或輸入對話 ID: ")
 			if err != nil {
 				if errors.Is(err, errCancelled) {
 					step = stepSource

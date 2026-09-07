@@ -21,6 +21,13 @@ type Candidate struct {
 	Description string
 }
 
+// CandidateList separates every readable session found from the bounded set
+// shown in a picker.
+type CandidateList struct {
+	Candidates []Candidate
+	Total      int
+}
+
 // Match is a session found by id lookup rather than by project scan. It
 // carries the recorded working directory so callers can warn when the
 // conversation belongs to a different project than the one being handed to.
@@ -124,6 +131,31 @@ func ClaudeCandidates(sourceHome, project string) ([]Candidate, error) {
 		return nil, fmt.Errorf("no readable Claude sessions for this project: %s", sessionDir)
 	}
 	return candidates, nil
+}
+
+// ClaudeCandidateList reports the total readable sessions for a project as
+// well as the newest candidates that fit in the picker.
+func ClaudeCandidateList(sourceHome, project string) (CandidateList, error) {
+	candidates, err := ClaudeCandidates(sourceHome, project)
+	if err != nil {
+		return CandidateList{}, err
+	}
+	absProject, err := filepath.Abs(project)
+	if err != nil {
+		return CandidateList{}, err
+	}
+	projectID := strings.NewReplacer("/", "-", "_", "-").Replace(absProject)
+	matches, err := filepath.Glob(filepath.Join(sourceHome, "projects", projectID, "*.jsonl"))
+	if err != nil {
+		return CandidateList{}, err
+	}
+	total := 0
+	for _, path := range matches {
+		if _, _, _, err := readClaudeSession(path); err == nil {
+			total++
+		}
+	}
+	return CandidateList{Candidates: candidates, Total: total}, nil
 }
 
 // claudeSessionStartTime returns the first "timestamp" field found in the
@@ -313,6 +345,34 @@ func CodexCandidates(codexHome, project string) ([]Candidate, error) {
 		candidates[i] = Candidate{m.path, describe(m.startTime, m.sessionID, m.preview)}
 	}
 	return candidates, nil
+}
+
+// CodexCandidateList reports the total readable sessions for a project as
+// well as the newest candidates that fit in the picker.
+func CodexCandidateList(codexHome, project string) (CandidateList, error) {
+	candidates, err := CodexCandidates(codexHome, project)
+	if err != nil {
+		return CandidateList{}, err
+	}
+	resolvedProject, err := filepath.Abs(project)
+	if err != nil {
+		return CandidateList{}, err
+	}
+	total := 0
+	err = filepath.WalkDir(filepath.Join(codexHome, "sessions"), func(path string, d os.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !strings.HasSuffix(path, ".jsonl") {
+			return nil
+		}
+		_, _, _, matched, readErr := scanCodexSession(path, resolvedProject)
+		if readErr == nil && matched {
+			total++
+		}
+		return nil
+	})
+	if err != nil {
+		return CandidateList{}, err
+	}
+	return CandidateList{Candidates: candidates, Total: total}, nil
 }
 
 // FindCodexByID returns every Codex session under codexHome whose id
