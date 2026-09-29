@@ -6,3 +6,4 @@ __pycache__/
 .claude/
 .omc/
 .agent-handoffs/
+docs/plans/
