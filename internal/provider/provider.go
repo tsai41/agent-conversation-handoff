@@ -1,9 +1,5 @@
 // Package provider execs into the claude/codex CLIs with the right
 // per-account environment (CLAUDE_CONFIG_DIR / CODEX_HOME).
-//
-// Unlike the old bash+python ach, this binary is the process entrypoint
-// itself, so there is no heredoc-diverted stdin to restore before exec:
-// os.Stdin is always the real terminal already.
 package provider
 
 import (
@@ -105,8 +101,6 @@ builtin unset ACH_LAUNCH_CWD ACH_LAUNCH_PROVIDER ACH_LAUNCH_HOME ACH_LAUNCH_DEFA
 	return append([]string{"zsh", "-lic", launchScript, "ach-launch", providerCommand}, args...)
 }
 
-// launchDir returns dir when it is an existing directory, else the current
-// directory.
 func launchDir(dir string) (string, error) {
 	if dir != "" {
 		if info, err := os.Stat(dir); err == nil && info.IsDir() {

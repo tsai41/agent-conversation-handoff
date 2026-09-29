@@ -14,9 +14,6 @@ import (
 	"github.com/tsai41/agent-conversation-handoff/internal/usage"
 )
 
-// TestBareInvocationDefaultsToMenu locks in that `ach` with no
-// subcommand behaves like the old bash launcher, which always ran
-// `ach menu --registry <default>` -- not a usage error.
 func TestBareInvocationDefaultsToMenu(t *testing.T) {
 	binary := filepath.Join(t.TempDir(), "ach")
 	build := exec.Command("go", "build", "-o", binary, ".")
@@ -35,10 +32,7 @@ func TestBareInvocationDefaultsToMenu(t *testing.T) {
 	cmd.Env = append(os.Environ(), "HOME="+home, "PATH="+fakeBin+string(os.PathListSeparator)+os.Getenv("PATH"))
 	out, err := cmd.CombinedOutput()
 
-	// A bare-invocation usage error would print "usage: ach ..." and
-	// exit before ever touching fzf/the registry. Reaching the menu's
-	// bootstrap flow (which calls our fake, cancelling fzf) proves the
-	// default routed through menu.Run instead; a cancelled bootstrap is
+	// A usage error would exit before reaching fzf. A cancelled bootstrap is
 	// a normal exit, so the proof is the cancellation line, not the code.
 	if err != nil {
 		t.Fatalf("expected a clean exit after fzf cancelled the bootstrap prompt: %v\n%s", err, out)

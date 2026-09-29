@@ -43,8 +43,6 @@ const (
 	crumbUsage    = "查看用量"
 )
 
-// breadcrumb renders the path bar shown above every picker, so which level
-// a keypress is answering is never ambiguous.
 func breadcrumb(segments ...string) string {
 	return strings.Join(append([]string{rootCrumb}, segments...), " > ")
 }
@@ -186,14 +184,11 @@ func pickSessionRow(candidates []session.Candidate, crumbs, prompt string) (stri
 	return path, nil
 }
 
-// readLine takes free-text input through fzf's search box rather than
-// stdin directly, so ESC there cancels the same way it does in every other
-// picker. fzf runs over an empty candidate list with --print-query: exit 1
-// ("no match", the expected outcome with nothing to match) still carries
-// the typed query on stdout, including an empty one when Enter is pressed
-// on a blank prompt (how 留空即清除 clears a value). Any other exit is a
-// real cancellation. See pickSession's exit-code contract for the same
-// pattern with rows in play.
+// readLine takes free-text input through fzf's search box so ESC cancels the
+// same way it does in every other picker. fzf runs over an empty candidate list
+// with --print-query: exit 1 ("no match") still carries the typed query on
+// stdout, including an empty one when Enter is pressed on a blank prompt (how
+// 留空即清除 clears a value). Any other exit is a real cancellation.
 func readLine(crumbs, prompt string) (string, error) {
 	if _, err := exec.LookPath("fzf"); err != nil {
 		return "", fmt.Errorf("fzf is required")
@@ -1117,13 +1112,11 @@ func findSessionsByID(account registry.Account, fragment string) ([]session.Matc
 	return session.FindCodexByID(account.Home, fragment)
 }
 
-// showUsage prints every registered account's Claude quota from whatever
-// snapshot files a separate program has already written to usageDir. It
-// never queries an API, never touches credentials, and never launches a
-// session -- it only reads files that are already there. A usageDir that
-// cannot be read (no permission, or the path is not a directory) is
-// reported to the user rather than failing the view: every account still
-// gets a row, just with no data, and the menu comes back either way.
+// showUsage prints every registered account's Claude quota. It only reads
+// snapshot files already in usageDir; it never queries an API or touches
+// credentials. A usageDir that cannot be read is reported to the user rather
+// than failing the view: every account still gets a row with no data, and the
+// menu comes back either way.
 func showUsage(registryPath, usageDir string) error {
 	showCrumbs(breadcrumb(crumbUsage))
 	r, err := registry.Load(registryPath)
@@ -1167,9 +1160,8 @@ func ResolveUsageDir(registryPath, flagValue string, flagExplicit bool) string {
 // costs one ESC instead of a restart.
 //
 // usageDirFlag and usageDirFlagExplicit are --usage-dir as parsed by the
-// caller; the usage view re-resolves the effective directory on every visit
-// (see ResolveUsageDir) so a directory set from 帳號設定 during this same
-// run takes effect immediately, without a restart.
+// caller; the usage view re-resolves the directory on every visit so one set
+// from 帳號設定 during this run takes effect without a restart.
 func Run(registryPath, usageDirFlag string, usageDirFlagExplicit bool) error {
 	if _, err := os.Stat(registryPath); os.IsNotExist(err) {
 		if err := bootstrapRegistry(registryPath); err != nil {

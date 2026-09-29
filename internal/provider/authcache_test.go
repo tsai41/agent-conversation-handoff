@@ -30,9 +30,7 @@ func TestCachedAuthStatusSkipsTheRealCheckWithinTTL(t *testing.T) {
 }
 
 func TestCachedAuthStatusRechecksAfterTTLExpires(t *testing.T) {
-	// Empty PATH guarantees AuthStatus can't find a real claude/codex CLI,
-	// so this can't accidentally shell out to whatever the test machine
-	// has installed (and can't hang on a real login prompt or network call).
+	// Empty PATH keeps AuthStatus from reaching a real claude/codex CLI.
 	t.Setenv("PATH", "")
 
 	dir := t.TempDir()

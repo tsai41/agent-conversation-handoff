@@ -46,8 +46,6 @@ func writeScript(t *testing.T, path, content string) {
 	}
 }
 
-// runWithFakePath prepends a temp bin dir (containing the given fake
-// scripts) to PATH and HOME for the duration of the test.
 func runWithFakePath(t *testing.T, home string) string {
 	t.Helper()
 	fakeBin := filepath.Join(home, "bin")
@@ -134,17 +132,11 @@ func runMenu(t *testing.T, registryPath, dir, stdin string) (string, string, err
 	return runMenuWithUsageDir(t, registryPath, "", dir, stdin)
 }
 
-// runMenuWithUsageDir is runMenu with an explicit usage snapshot directory
-// (as if --usage-dir were passed on the command line), for tests that drive
-// the "查看用量" view.
 func runMenuWithUsageDir(t *testing.T, registryPath, usageDir, dir, stdin string) (string, string, error) {
 	t.Helper()
 	return runMenuWithUsageDirFlag(t, registryPath, usageDir, true, dir, stdin)
 }
 
-// runMenuWithUsageDirFlag is runMenuWithUsageDir with control over whether
-// --usage-dir counts as explicitly passed, for tests exercising the
-// flag-vs-stored-setting precedence through the full menu loop.
 func runMenuWithUsageDirFlag(t *testing.T, registryPath, usageDir string, usageDirExplicit bool, dir, stdin string) (string, string, error) {
 	t.Helper()
 	cmd := exec.Command(os.Args[0], "-test.run=TestHelperRunMenu")
@@ -208,10 +200,7 @@ func TestHelperQuickHandoff(t *testing.T) {
 	}
 }
 
-// Free-text input (alias, usage-dir path) now goes through fzf rather than
-// os.Stdin, so nothing in the menu package reads real stdin ahead of an
-// account launch any more; this only confirms that launching an account
-// still hands the CLI process the real stdin untouched.
+// Launching an account must hand the CLI process the real stdin untouched.
 func TestRunPicksAFunctionBeforeAnAccountThenPassesRealStdinToTheLaunchedCLI(t *testing.T) {
 	home := t.TempDir()
 	runWithFakePath(t, home)
@@ -234,7 +223,6 @@ func TestRunPicksAFunctionBeforeAnAccountThenPassesRealStdinToTheLaunchedCLI(t *
 		t.Fatalf("menu run failed: %v\nstderr: %s", err, stderr)
 	}
 
-	// Level one offers the three functions, not the accounts.
 	functions := callFile(t, calls, "rows-0")
 	for _, want := range []string{"1. 使用帳號對話", "2. 接手對話", "3. 帳號設定"} {
 		if !strings.Contains(functions, want) {
@@ -258,7 +246,6 @@ func TestRunPicksAFunctionBeforeAnAccountThenPassesRealStdinToTheLaunchedCLI(t *
 		t.Fatalf("expected the root path bar in the picker, got argv: %s", argv)
 	}
 
-	// Level two offers the accounts, under a path bar naming the function.
 	accounts := callFile(t, calls, "rows-1")
 	for _, want := range []string{"1. Claude", "2. Codex"} {
 		if !strings.Contains(accounts, want) {
@@ -465,9 +452,8 @@ func TestRunResumeByTypedIDWithSeveralMatchesLaunchesInThePickedSessionsDirector
 	}
 }
 
-// ESC during first-run setup is a normal exit, not an error: nothing has
-// been written yet, so backing out must not surface as "Error: selection
-// cancelled" with a non-zero exit.
+// ESC during first-run setup is a normal exit: nothing has been written, and it
+// must not surface as an error with a non-zero exit.
 func TestRunExitsCleanlyWhenBootstrapSetupIsCancelled(t *testing.T) {
 	home := t.TempDir()
 	runWithFakePath(t, home)
@@ -554,10 +540,8 @@ func TestUsageViewPrintsAndReturnsToTheMenu(t *testing.T) {
 	}
 }
 
-// TestUsageViewWithNoSnapshotDirectoryShowsNoDataForEveryAccount covers the
-// ordinary state before the writing program has ever run: the view must
-// still print a table and hand the menu back, not exit non-zero just
-// because usage data hasn't been configured yet.
+// Before the writing program has ever run, the view still prints a table and
+// hands the menu back.
 func TestUsageViewWithNoSnapshotDirectoryShowsNoDataForEveryAccount(t *testing.T) {
 	home := t.TempDir()
 	runWithFakePath(t, home)
@@ -600,10 +584,7 @@ func TestUsageViewWithNoSnapshotDirectoryShowsNoDataForEveryAccount(t *testing.T
 	}
 }
 
-// TestUsageViewWithAnEmptySnapshotDirectoryShowsNoDataForEveryAccount covers
-// a writing program that has been enabled but has not written anything for
-// these accounts yet -- an empty directory must read the same as no
-// directory at all, not as an error.
+// An empty snapshot directory reads the same as no directory at all.
 func TestUsageViewWithAnEmptySnapshotDirectoryShowsNoDataForEveryAccount(t *testing.T) {
 	home := t.TempDir()
 	runWithFakePath(t, home)
@@ -638,11 +619,8 @@ func TestUsageViewWithAnEmptySnapshotDirectoryShowsNoDataForEveryAccount(t *test
 	}
 }
 
-// TestUsageViewSurvivesAnUnreadableSnapshotDirectory covers a usageDir that
-// os.ReadDir refuses for a reason other than not existing (here, the path
-// is a plain file). The old behavior propagated that error all the way out
-// of Run and exited the CLI with status 1; the view must instead report the
-// problem and still hand the menu back.
+// A usageDir that os.ReadDir refuses for a reason other than not existing (here,
+// a plain file) is reported, and the menu still comes back.
 func TestUsageViewSurvivesAnUnreadableSnapshotDirectory(t *testing.T) {
 	home := t.TempDir()
 	runWithFakePath(t, home)
@@ -1039,9 +1017,7 @@ func TestShareAllAccountSettingsReportsABareSourceDistinctly(t *testing.T) {
 	}
 }
 
-// offerSharedSettings reported linked+failed as the denominator, excluding
-// entries that were already shared -- one linked, three already shared and
-// one failed printed "1/2" instead of the true "4/5".
+// Entries that were already shared count toward the summary's total.
 func TestOfferSharedSettingsCountsAlreadySharedEntriesInTheTotal(t *testing.T) {
 	home := t.TempDir()
 	runWithFakePath(t, home)
@@ -1252,8 +1228,6 @@ func TestManageAccountsClearsUsageDirectoryOnEmptyInput(t *testing.T) {
 	}
 }
 
-// writeRegistryTwoClaudeAccounts is writeRegistry with a second claude
-// account, for tests that need trust to have a real other-account target.
 func writeRegistryTwoClaudeAccounts(t *testing.T, path, claude1Home, claude2Home, codexHome string) {
 	t.Helper()
 	content := fmt.Sprintf(`{

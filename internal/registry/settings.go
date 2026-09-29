@@ -9,7 +9,6 @@ import (
 	"time"
 )
 
-// EntryKind distinguishes a shared file from a shared directory.
 type EntryKind int
 
 const (
@@ -17,8 +16,6 @@ const (
 	EntryDir
 )
 
-// SettingsEntry is one file or directory shared between accounts of a
-// provider.
 type SettingsEntry struct {
 	Name string
 	Kind EntryKind
@@ -47,7 +44,6 @@ var sharedEntries = map[string][]SettingsEntry{
 	},
 }
 
-// EntryPath is where one shared entry lives inside an account home.
 func EntryPath(account Account, entry SettingsEntry) string {
 	return filepath.Join(account.Home, entry.Name)
 }
@@ -100,7 +96,6 @@ func (s EntryState) String() string {
 	}
 }
 
-// EntryShare reports what ShareSettings found and did for one shared entry.
 type EntryShare struct {
 	Name string
 	// Before is EntryUnexamined when Err or SourceMissing ended the check
@@ -265,8 +260,6 @@ func shareEntry(source, target Account, entry SettingsEntry, replace bool) Entry
 	return share
 }
 
-// kindMismatchError describes a file or directory sitting where an entry
-// of the other kind belongs.
 func kindMismatchError(accountID string, entry SettingsEntry, foundDir bool) error {
 	if foundDir {
 		return fmt.Errorf("%s has a directory where its %s belongs", accountID, entry.Name)

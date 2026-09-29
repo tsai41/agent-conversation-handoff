@@ -14,8 +14,6 @@ import (
 // scheme applied to .claude.json.
 var trustBackupNamePattern = regexp.MustCompile(`^\.claude\.json\.bak-\d{8}-\d{6}(-\d+)?$`)
 
-// claudeAccountHome creates a fresh account home (as account creation would
-// leave it) and returns a claude Account rooted there.
 func claudeAccountHome(t *testing.T, id string, number int) Account {
 	t.Helper()
 	return account(id, "claude", t.TempDir(), number)
@@ -32,8 +30,6 @@ func writeClaudeJSON(t *testing.T, acc Account, doc string) {
 	}
 }
 
-// projectsOf decodes doc's "projects" object for comparison, failing the
-// test if doc is not valid JSON or has no such object.
 func projectsOf(t *testing.T, doc string) map[string]any {
 	t.Helper()
 	decoded, err := decodeClaudeJSONBytes([]byte(doc))
@@ -123,15 +119,9 @@ func TestSyncProjectTrustMergeBehavior(t *testing.T) {
 	}
 }
 
-// TestSyncProjectTrustPreservesEverythingOutsideTheWhitelist proves the merge
-// touches only whitelist fields on projects the source also has: other
-// top-level keys, a project only the target has, and non-whitelist keys on a
-// project both sides have must all survive value-for-value, and the two
-// numbers most likely to lose precision through a naive round-trip
-// (a 13-digit millisecond timestamp and a fractional cost) must still be
-// present as the exact literal that was written. It also proves the
-// pre-write backup this same call makes holds the original bytes under the
-// naming scheme freeBackupPath uses.
+// SyncProjectTrust touches only whitelist fields: other top-level keys, target-only
+// projects and non-whitelist keys survive, large-precision numbers keep their exact
+// literal, and the pre-write backup holds the original bytes.
 func TestSyncProjectTrustPreservesEverythingOutsideTheWhitelist(t *testing.T) {
 	source := claudeAccountHome(t, "claude-1", 1)
 	target := claudeAccountHome(t, "claude-2", 2)

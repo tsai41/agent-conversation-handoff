@@ -44,8 +44,6 @@ func fail(err error) {
 }
 
 func main() {
-	// A bare `ach` invocation (no subcommand) opens the menu, same
-	// as the old bash launcher used to always run `ach menu --registry ...`.
 	command := "menu"
 	args := []string{}
 	if len(os.Args) >= 2 {
@@ -92,10 +90,8 @@ func main() {
 		registryPath := fs.String("registry", defaultRegistryPath(), "")
 		usageDir := fs.String("usage-dir", defaultUsageDir(), "")
 		fs.Parse(args)
-		// fs.Visit only calls back for flags actually set on the command
-		// line, which is how "the user passed --usage-dir" is told apart
-		// from "the user passed nothing" even though usageDir's *string
-		// already holds the default value in both cases.
+		// fs.Visit fires only for flags actually passed; usageDir holds the
+		// default whether or not it was.
 		usageDirSet := false
 		fs.Visit(func(f *flag.Flag) {
 			if f.Name == "usage-dir" {

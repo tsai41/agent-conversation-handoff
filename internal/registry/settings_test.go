@@ -11,7 +11,6 @@ func account(id, provider, home string, number int) Account {
 	return Account{ID: id, Provider: provider, Number: number, Home: home}
 }
 
-// docPath is the primary settings document these tests exercise.
 func docPath(account Account) string {
 	if account.Provider == "codex" {
 		return filepath.Join(account.Home, "config.toml")
@@ -19,8 +18,6 @@ func docPath(account Account) string {
 	return filepath.Join(account.Home, "settings.json")
 }
 
-// homes builds a source home holding a settings document and an empty
-// target home, the shape account creation produces.
 func homes(t *testing.T, provider, content string) (Account, Account) {
 	t.Helper()
 	dir := t.TempDir()
@@ -41,9 +38,6 @@ func homes(t *testing.T, provider, content string) (Account, Account) {
 	return source, account("tgt-2", provider, targetHome, 2)
 }
 
-// entryNamed finds one entry's result by name, failing the test if
-// ShareSettings did not return it -- a missing entry is itself a bug, not a
-// case for the caller to handle.
 func entryNamed(t *testing.T, shares []EntryShare, name string) EntryShare {
 	t.Helper()
 	for _, share := range shares {
@@ -86,8 +80,6 @@ func TestShareSettingsLinksAFreshAccountHome(t *testing.T) {
 	}
 	assertLinkedTo(t, target, docPath(target), docPath(source))
 
-	// Reading through the link must give the source document, and a write
-	// to the source must be visible through it.
 	if err := os.WriteFile(docPath(source), []byte(`{"theme":"dark"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -198,11 +190,8 @@ func TestShareSettingsRefusesALinkToSomewhereElse(t *testing.T) {
 	}
 }
 
-// A bare source is an ordinary shape, not an error: most accounts only
-// have settings.json, and a fresh account has none of the shared
-// directories either. Each entry the source lacks is reported as
-// SourceMissing rather than as a per-entry error, and ShareSettings itself
-// still succeeds.
+// A source with only settings.json is ordinary: each missing entry is reported as
+// SourceMissing, not as an error.
 func TestShareSettingsReportsSourceMissingForABareSource(t *testing.T) {
 	source, target := homes(t, "claude", "")
 
@@ -231,10 +220,7 @@ func TestShareSettingsRefusesAnAccountSharingWithItself(t *testing.T) {
 	}
 }
 
-// Each provider's entries were checked for existence independently, with
-// nothing requiring the two providers to match. A claude source paired with
-// a codex target passed both checks and would have symlinked claude's files
-// into the codex home.
+// A claude source paired with a codex target is refused.
 func TestShareSettingsRefusesAProviderMismatch(t *testing.T) {
 	dir := t.TempDir()
 	claudeHome := filepath.Join(dir, "claude")
@@ -259,9 +245,7 @@ func TestShareSettingsRefusesAProviderMismatch(t *testing.T) {
 	}
 }
 
-// Only the source's provider was checked for a known settings table; a
-// target on a provider with nothing to share would otherwise have every
-// entry linked into it regardless.
+// A target whose provider has nothing to share is refused.
 func TestShareSettingsRefusesATargetProviderWithNothingToShare(t *testing.T) {
 	source, target := homes(t, "claude", `{"a":1}`)
 	target.Provider = "gemini"
@@ -326,9 +310,8 @@ func TestPrimaryAccountIsTheLowestNumberedOfItsProvider(t *testing.T) {
 	}
 }
 
-// Two registry entries can name one physical home when one path reaches it
-// through a symlink. Comparing ids alone let that through, and the result
-// was the source document renamed away and replaced by a link to itself.
+// Two registry entries can name one physical home through a symlink, so ids
+// alone do not identify an account.
 func TestShareSettingsRefusesTwoAccountsOnOnePhysicalHome(t *testing.T) {
 	dir := t.TempDir()
 	realHome := filepath.Join(dir, "claude")
@@ -492,8 +475,7 @@ func TestShareSettingsRefusesADirectoryWhereTheDocumentBelongs(t *testing.T) {
 	}
 }
 
-// A plain file sitting where a shared directory belongs is the mirror
-// image of the case above, and must be refused the same way.
+// A plain file where a shared directory belongs is refused, like the reverse.
 func TestShareSettingsRefusesAFileWhereASharedDirectoryBelongs(t *testing.T) {
 	source, target := homes(t, "claude", `{"a":1}`)
 	if err := os.MkdirAll(filepath.Join(source.Home, "skills"), 0o755); err != nil {
@@ -577,9 +559,7 @@ func TestShareSettingsRefusesWhenTheDocumentsAreAlreadyOneFile(t *testing.T) {
 	}
 }
 
-// A directory in the source's document position was refused on the target
-// side but linked on the source side, handing every sibling a link to a
-// directory and calling it a share.
+// A directory in the source's document position is refused, not linked.
 func TestShareSettingsRefusesADirectoryInTheSourcesDocumentPosition(t *testing.T) {
 	source, target := homes(t, "claude", "")
 	if err := os.MkdirAll(docPath(source), 0o755); err != nil {
@@ -599,8 +579,6 @@ func TestShareSettingsRefusesADirectoryInTheSourcesDocumentPosition(t *testing.T
 	}
 }
 
-// A directory entry links the same way a file entry does: the whole
-// directory becomes a symlink onto the source's.
 func TestShareSettingsLinksADirectoryEntry(t *testing.T) {
 	source, target := homes(t, "claude", `{"a":1}`)
 	sourceSkills := filepath.Join(source.Home, "skills")
@@ -651,10 +629,7 @@ func TestShareSettingsKeepsADirectoryBackupEvenWhenIdentical(t *testing.T) {
 	assertLinkedTo(t, target, targetSkills, sourceSkills)
 }
 
-// One entry having nothing to share must not stop the rest from linking: a
-// source that has settings.json but none of the other shared entries still
-// shares the file while each entry the source lacks is reported as
-// SourceMissing on its own.
+// An entry the source lacks does not stop the rest from linking.
 func TestShareSettingsLinksOneEntryWhileOthersHaveNothingToShare(t *testing.T) {
 	source, target := homes(t, "claude", `{"a":1}`)
 
@@ -746,9 +721,7 @@ func TestShareSettingsKeepsTheBackupWhenSomethingClaimsTheTargetMeanwhile(t *tes
 	}
 }
 
-// The restore path's directory branch mirrors the file branch above: the
-// rename that moves the original skills directory aside succeeds, then the
-// symlink fails, and the directory must be put back the same way.
+// The directory branch of the restore path behaves like the file branch.
 func TestShareSettingsRestoresADirectoryWhenTheSymlinkFails(t *testing.T) {
 	source, target := homes(t, "claude", `{"a":1}`)
 	sourceSkills := filepath.Join(source.Home, "skills")
@@ -816,9 +789,6 @@ func TestRenameEntryDirectoryBypassRefusesANonEmptyDestination(t *testing.T) {
 	}
 }
 
-// The file-entry collision loop is covered above; a directory placeholder
-// is claimed the same way through os.Mkdir, and a taken name must be
-// skipped for it too.
 func TestFreeBackupPathNeverHandsOutATakenDirectoryName(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "skills")

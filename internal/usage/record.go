@@ -65,16 +65,14 @@ func ResolveRecordDir(registryPath, flagValue string, flagExplicit bool) string 
 	return flagValue
 }
 
-// Record reads one Claude Code statusLine JSON document from in and writes
-// a version 1 snapshot for configDir into usageDir, atomically. configDir is
-// normalised the way registry account homes are (~ expanded, absolute,
-// cleaned) before it is hashed and written, so spellings of one directory
-// share one file. Input that
-// yields nothing to record -- malformed JSON, no rate_limits, or neither
-// window carrying a used_percentage -- writes nothing and returns nil, so
-// a status line that pipes into it is never broken by a payload it does not
-// like; so does a configDir that cannot be resolved (no home directory).
-// Only a failure to write returns an error.
+// Record reads one Claude Code statusLine JSON document from in and writes a
+// version 1 snapshot for configDir into usageDir, atomically. configDir is
+// normalised the way registry account homes are (~ expanded, absolute, cleaned)
+// before it is hashed and written, so spellings of one directory share one file.
+// Input that yields nothing to record (malformed JSON, no rate_limits, no window
+// with a usable used_percentage, or a configDir that cannot be resolved) writes
+// nothing and returns nil, so a status line piping into it is never broken by a
+// payload it does not like. Only a failure to write returns an error.
 func Record(in io.Reader, usageDir, configDir string, now time.Time) error {
 	configDir, err := registry.ResolveHome(configDir)
 	if err != nil {

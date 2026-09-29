@@ -228,7 +228,6 @@ func windowBeats(a, b *Window) bool {
 	return a.checkedAt.After(b.checkedAt)
 }
 
-// Row is one rendered line of the usage table.
 type Row struct {
 	Label     string
 	FiveHour  string
@@ -311,7 +310,6 @@ func ageText(t, now time.Time) string {
 	}
 }
 
-// Fprint writes rows as a plain aligned table.
 func Fprint(w io.Writer, rows []Row) {
 	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
 	fmt.Fprintln(tw, "帳號\t5 小時\t7 天\t資料時間")

@@ -21,8 +21,8 @@ type Candidate struct {
 	Description string
 }
 
-// CandidateList separates every readable session found from the bounded set
-// shown in a picker.
+// CandidateList separates every readable session found (Total) from the
+// bounded set shown in a picker (Candidates).
 type CandidateList struct {
 	Candidates []Candidate
 	Total      int
@@ -38,7 +38,6 @@ type Match struct {
 	StartTime time.Time
 }
 
-// ID reads the provider session identifier recorded in path.
 func ID(path, provider string) (string, error) {
 	if provider == "claude" {
 		id, _, _, err := readClaudeSession(path)
@@ -330,10 +329,9 @@ func escapeGlobMeta(path string) string {
 
 var codexRolloutTimestamp = regexp.MustCompile(`rollout-(\d{4}-\d{2}-\d{2})T(\d{2})-(\d{2})-(\d{2})-`)
 
-// codexSessionStartTime parses the session's start time out of its
-// "rollout-YYYY-MM-DDTHH-MM-SS-<uuid>.jsonl" filename (encoded in local
-// time -- confirmed against fresh, never-resumed sessions where filename
-// and mtime match), falling back to mtime if the name doesn't match.
+// codexSessionStartTime parses the session start time from the
+// "rollout-YYYY-MM-DDTHH-MM-SS-<uuid>.jsonl" filename (local time), falling
+// back to mtime if the name does not match.
 func codexSessionStartTime(path string) time.Time {
 	match := codexRolloutTimestamp.FindStringSubmatch(filepath.Base(path))
 	if match != nil {
@@ -344,12 +342,11 @@ func codexSessionStartTime(path string) time.Time {
 	return fallbackModTime(path)
 }
 
-// CodexCandidates lists Codex sessions under codexHome/sessions whose
-// recorded cwd matches project, newest conversation first (see
-// codexSessionStartTime for why this isn't mtime). Codex sessions aren't
-// stored per-project, so this walks the whole history; it stops reading a
-// file as soon as its session_meta cwd doesn't match, instead of reading
-// the file in full.
+// CodexCandidates lists Codex sessions under codexHome/sessions whose recorded
+// cwd matches project, newest conversation first. Order is by session start
+// time, not mtime, because resuming a session bumps its mtime. Sessions are
+// not stored per project, so this walks the whole history but stops reading a
+// file as soon as its session_meta cwd does not match.
 func CodexCandidates(codexHome, project string) ([]Candidate, error) {
 	sessionsDir := filepath.Join(codexHome, "sessions")
 	info, err := os.Stat(sessionsDir)

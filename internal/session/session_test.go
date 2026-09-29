@@ -260,10 +260,8 @@ func TestCodexCandidatesOrderByFilenameStartTimeNotMtime(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// "older" started earlier but was resumed much more recently than
-	// "newer" -- its mtime is now the later of the two, the opposite of
-	// their real conversation order. The picker must still list the
-	// session that started later ("newer") first.
+	// "older" was resumed more recently, so its mtime is later, but "newer"
+	// started later and must still be listed first.
 	olderPath := filepath.Join(sessionsDir, "rollout-2026-01-01T09-00-00-aaaaaaaa-0000-0000-0000-000000000000.jsonl")
 	newerPath := filepath.Join(sessionsDir, "rollout-2026-01-02T09-00-00-bbbbbbbb-0000-0000-0000-000000000000.jsonl")
 	writeSession(t, olderPath, mustAbs(t, project), "older-id", "started first, resumed later")

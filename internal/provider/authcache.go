@@ -28,9 +28,7 @@ func loadAuthCache(path string) map[string]authCacheEntry {
 	if err != nil {
 		return cache
 	}
-	// A corrupt or unreadable cache just means every lookup misses and
-	// re-checks -- it's a perf cache, not a source of truth, so it's not
-	// worth failing the caller over.
+	// A corrupt cache just means every lookup misses; it is not worth failing over.
 	json.Unmarshal(raw, &cache)
 	return cache
 }

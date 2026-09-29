@@ -347,7 +347,6 @@ func SetUsageDir(path string, usageDir string) (string, error) {
 	return resolved, err
 }
 
-// DiscoveredAccount is a candidate account home found by Discover.
 type DiscoveredAccount struct {
 	Provider string
 	Home     string
