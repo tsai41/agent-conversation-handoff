@@ -11,8 +11,7 @@ import (
 )
 
 // trustBackupNamePattern matches freeBackupPath's ".bak-<timestamp>" naming
-// scheme applied to .claude.json, the way backupNamePattern in
-// statusline_test.go matches it for settings.json.
+// scheme applied to .claude.json.
 var trustBackupNamePattern = regexp.MustCompile(`^\.claude\.json\.bak-\d{8}-\d{6}(-\d+)?$`)
 
 // claudeAccountHome creates a fresh account home (as account creation would
@@ -604,5 +603,18 @@ func TestDecodeClaudeJSONRejectsDataAfterTheDocument(t *testing.T) {
 	}
 	if _, err := decodeClaudeJSONBytes([]byte("{\"projects\": {}}\n")); err != nil {
 		t.Fatalf("a trailing newline must still decode: %v", err)
+	}
+}
+
+func assertNoBackupFiles(t *testing.T, dir string) {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if strings.Contains(e.Name(), ".bak-") {
+			t.Fatalf("expected no backup file, found %s", e.Name())
+		}
 	}
 }

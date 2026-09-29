@@ -3,6 +3,7 @@ package usage
 import (
 	"bytes"
 	"encoding/json"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -288,6 +289,166 @@ func TestFprintRendersAllRows(t *testing.T) {
 	for _, want := range []string{"Claude", "Codex", "55%", "92%", "3 分鐘前", "沒有資料"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("expected output to contain %q, got: %s", want, out)
+		}
+	}
+}
+
+func TestLoadDirSkipsSnapshotsWithUnusableIdentity(t *testing.T) {
+	tests := []struct {
+		name string
+		body string
+	}{
+		{"relative config_dir", `{"version":1,"config_dir":"rel/.claude","checked_at":"2026-09-04T07:12:33Z","five_hour":{"used_percentage":5}}`},
+		{"tilde config_dir", `{"version":1,"config_dir":"~/.claude","checked_at":"2026-09-04T07:12:33Z","five_hour":{"used_percentage":5}}`},
+		{"empty config_dir", `{"version":1,"config_dir":"","checked_at":"2026-09-04T07:12:33Z","five_hour":{"used_percentage":5}}`},
+		{"missing config_dir", `{"version":1,"checked_at":"2026-09-04T07:12:33Z","five_hour":{"used_percentage":5}}`},
+		{"zero checked_at", `{"version":1,"config_dir":"/home/.claude","checked_at":"0001-01-01T00:00:00Z","five_hour":{"used_percentage":5}}`},
+		{"missing checked_at", `{"version":1,"config_dir":"/home/.claude","five_hour":{"used_percentage":5}}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			writeSnapshotFile(t, dir, "s.json", tt.body)
+			snaps, err := LoadDir(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(snaps) != 0 {
+				t.Fatalf("expected the snapshot to be skipped, got %+v", snaps)
+			}
+		})
+	}
+}
+
+func TestMatchLatestPicksEachWindowIndependentlyOfTheClock(t *testing.T) {
+	home := t.TempDir()
+	accounts := []registry.Account{{ID: "claude-1", Provider: "claude", Number: 1, Home: home}}
+	at := func(h int) time.Time { return time.Date(2026, 9, 29, h, 0, 0, 0, time.UTC) }
+	reset := func(h int) *time.Time { r := at(h); return &r }
+	snap := func(checked int, five, seven *Window) Snapshot {
+		return Snapshot{Version: 1, ConfigDir: home, CheckedAt: at(checked), FiveHour: five, SevenDay: seven}
+	}
+
+	tests := []struct {
+		name         string
+		snaps        []Snapshot
+		wantFive     *float64
+		wantSeven    *float64
+		wantCheckedH int
+	}{
+		{
+			name: "idle session with newer checked_at but lower percentage for the same resets_at loses",
+			snaps: []Snapshot{
+				snap(10, &Window{UsedPercentage: pct(60), ResetsAt: reset(14)}, nil),
+				snap(12, &Window{UsedPercentage: pct(20), ResetsAt: reset(14)}, nil),
+			},
+			wantFive:     pct(60),
+			wantCheckedH: 10,
+		},
+		{
+			name: "newer window beats an older one even when its snapshot is older and higher",
+			snaps: []Snapshot{
+				snap(12, &Window{UsedPercentage: pct(5), ResetsAt: reset(19)}, nil),
+				snap(11, &Window{UsedPercentage: pct(90), ResetsAt: reset(14)}, nil),
+			},
+			wantFive:     pct(5),
+			wantCheckedH: 12,
+		},
+		{
+			name: "each window is chosen from its own snapshot",
+			snaps: []Snapshot{
+				snap(9, &Window{UsedPercentage: pct(30), ResetsAt: reset(14)}, &Window{UsedPercentage: pct(70), ResetsAt: reset(20)}),
+				snap(12, &Window{UsedPercentage: pct(35), ResetsAt: reset(14)}, &Window{UsedPercentage: pct(10), ResetsAt: reset(19)}),
+			},
+			wantFive:     pct(35),
+			wantSeven:    pct(70),
+			wantCheckedH: 9,
+		},
+		{
+			name: "without any resets_at the latest checked_at wins",
+			snaps: []Snapshot{
+				snap(9, &Window{UsedPercentage: pct(80)}, nil),
+				snap(12, &Window{UsedPercentage: pct(10)}, nil),
+			},
+			wantFive:     pct(10),
+			wantCheckedH: 12,
+		},
+		{
+			name: "a candidate with resets_at outranks one without",
+			snaps: []Snapshot{
+				snap(12, &Window{UsedPercentage: pct(10)}, nil),
+				snap(9, &Window{UsedPercentage: pct(40), ResetsAt: reset(14)}, nil),
+			},
+			wantFive:     pct(40),
+			wantCheckedH: 9,
+		},
+		{
+			name: "a candidate without resets_at observed after the other's reset wins",
+			snaps: []Snapshot{
+				snap(9, &Window{UsedPercentage: pct(90), ResetsAt: reset(10)}, nil),
+				snap(12, &Window{UsedPercentage: pct(5)}, nil),
+			},
+			wantFive:     pct(5),
+			wantCheckedH: 12,
+		},
+		{
+			name: "a candidate without resets_at observed exactly at the other's reset wins",
+			snaps: []Snapshot{
+				snap(12, &Window{UsedPercentage: pct(5)}, nil),
+				snap(9, &Window{UsedPercentage: pct(90), ResetsAt: reset(12)}, nil),
+			},
+			wantFive:     pct(5),
+			wantCheckedH: 12,
+		},
+		{
+			name: "equal resets_at and percentage: the later checked_at wins",
+			snaps: []Snapshot{
+				snap(12, &Window{UsedPercentage: pct(40), ResetsAt: reset(14)}, nil),
+				snap(10, &Window{UsedPercentage: pct(40), ResetsAt: reset(14)}, nil),
+			},
+			wantFive:     pct(40),
+			wantCheckedH: 12,
+		},
+		{
+			name: "an out-of-range percentage is no data and never wins",
+			snaps: []Snapshot{
+				snap(12, &Window{UsedPercentage: pct(140), ResetsAt: reset(19)}, &Window{UsedPercentage: pct(-1)}),
+				snap(9, &Window{UsedPercentage: pct(30), ResetsAt: reset(14)}, nil),
+			},
+			wantFive:     pct(30),
+			wantCheckedH: 9,
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := MatchLatest(accounts, tt.snaps)["claude-1"]
+			for label, pair := range map[string]struct {
+				w    *Window
+				want *float64
+			}{"five_hour": {got.FiveHour, tt.wantFive}, "seven_day": {got.SevenDay, tt.wantSeven}} {
+				switch {
+				case pair.want == nil && pair.w != nil:
+					t.Errorf("%s = %+v, want no data", label, pair.w)
+				case pair.want != nil && pair.w == nil:
+					t.Errorf("%s missing, want %v", label, *pair.want)
+				case pair.want != nil && *pair.w.UsedPercentage != *pair.want:
+					t.Errorf("%s = %v, want %v", label, *pair.w.UsedPercentage, *pair.want)
+				}
+			}
+			if !got.CheckedAt.Equal(at(tt.wantCheckedH)) {
+				t.Errorf("CheckedAt = %v, want hour %d", got.CheckedAt, tt.wantCheckedH)
+			}
+		})
+	}
+}
+
+func TestBuildRowsTreatsAnOutOfRangePercentageAsNoData(t *testing.T) {
+	now := time.Date(2026, 9, 29, 10, 0, 0, 0, time.UTC)
+	for _, p := range []float64{-0.5, 100.5, math.NaN(), math.Inf(1)} {
+		snap := Snapshot{Version: 1, ConfigDir: "/x", CheckedAt: now, FiveHour: &Window{UsedPercentage: pct(p)}}
+		rows := BuildRows([]struct{ ID, Label string }{{"a", "A"}}, map[string]Snapshot{"a": snap}, now)
+		if rows[0].FiveHour != "–" {
+			t.Fatalf("percentage %v rendered as %q, want no data", p, rows[0].FiveHour)
 		}
 	}
 }

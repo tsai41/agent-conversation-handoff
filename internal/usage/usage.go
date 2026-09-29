@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"strings"
@@ -43,6 +44,21 @@ const (
 type Window struct {
 	UsedPercentage *float64
 	ResetsAt       *time.Time
+
+	// checkedAt is the checked_at of the snapshot this window was chosen
+	// from, set by MatchLatest. Zero means the caller built the Window by
+	// hand and the enclosing Snapshot's CheckedAt applies.
+	checkedAt time.Time
+}
+
+// hasData reports whether w carries a usable percentage: present, finite,
+// and within 0 to 100. Anything else counts as no data for that window.
+func (w *Window) hasData() bool {
+	if w == nil || w.UsedPercentage == nil {
+		return false
+	}
+	p := *w.UsedPercentage
+	return !math.IsNaN(p) && p >= 0 && p <= 100
 }
 
 // UnmarshalJSON parses resets_at leniently: a value that is not a valid
@@ -83,8 +99,9 @@ type Snapshot struct {
 // LoadDir reads every *.json file in dir as a Snapshot. A missing directory
 // yields no snapshots rather than an error -- that is the ordinary state
 // before the writing program has ever run. A file that cannot be read,
-// cannot be parsed, or carries an unsupported version is skipped rather
-// than failing the whole load, so one bad file never hides the others.
+// cannot be parsed, carries an unsupported version, has an empty or
+// non-absolute config_dir, or has a zero checked_at is skipped rather than
+// failing the whole load, so one bad file never hides the others.
 func LoadDir(dir string) ([]Snapshot, error) {
 	entries, err := os.ReadDir(dir)
 	if os.IsNotExist(err) {
@@ -114,35 +131,101 @@ func readSnapshot(path string) (Snapshot, bool) {
 	if err := json.Unmarshal(raw, &snap); err != nil {
 		return Snapshot{}, false
 	}
-	if snap.Version != supportedVersion {
+	if snap.Version != supportedVersion || !filepath.IsAbs(snap.ConfigDir) || snap.CheckedAt.IsZero() {
 		return Snapshot{}, false
 	}
 	return snap, true
 }
 
-// MatchLatest pairs each account with the most recently checked snapshot
-// whose ConfigDir resolves to that account's Home on the filesystem (see
-// registry.SameFile) rather than by spelling. An account with no matching
-// snapshot is simply absent from the result.
+// MatchLatest builds each account's snapshot from every snapshot whose
+// ConfigDir resolves to that account's Home on the filesystem (see
+// registry.SameFile) rather than by spelling. Each window is chosen on its
+// own from all matching snapshots, without consulting the wall clock: the
+// value with the latest resets_at wins, since that is the newest quota
+// window; on equal resets_at the larger percentage wins, since usage only
+// grows within a window (an idle session can keep rewriting an older, lower
+// number under a newer checked_at). A candidate with a resets_at outranks one
+// without; when neither has one, the latest checked_at wins. The returned
+// CheckedAt is the oldest checked_at among the chosen windows, so the
+// freshness shown never overstates how recent the numbers are. An account
+// with no matching snapshot is simply absent from the result.
 func MatchLatest(accounts []registry.Account, snapshots []Snapshot) map[string]Snapshot {
 	result := map[string]Snapshot{}
 	for _, account := range accounts {
-		var best Snapshot
-		found := false
+		var matched []Snapshot
 		for _, snap := range snapshots {
-			if !registry.SameFile(snap.ConfigDir, account.Home) {
-				continue
-			}
-			if !found || snap.CheckedAt.After(best.CheckedAt) {
-				best = snap
-				found = true
+			if registry.SameFile(snap.ConfigDir, account.Home) {
+				matched = append(matched, snap)
 			}
 		}
-		if found {
-			result[account.ID] = best
+		if len(matched) == 0 {
+			continue
 		}
+		newest := matched[0]
+		for _, snap := range matched[1:] {
+			if snap.CheckedAt.After(newest.CheckedAt) {
+				newest = snap
+			}
+		}
+		merged := Snapshot{
+			Version:   supportedVersion,
+			ConfigDir: newest.ConfigDir,
+			FiveHour:  pickWindow(matched, func(s Snapshot) *Window { return s.FiveHour }),
+			SevenDay:  pickWindow(matched, func(s Snapshot) *Window { return s.SevenDay }),
+		}
+		merged.CheckedAt = newest.CheckedAt
+		var oldest time.Time
+		for _, w := range []*Window{merged.FiveHour, merged.SevenDay} {
+			if w != nil && (oldest.IsZero() || w.checkedAt.Before(oldest)) {
+				oldest = w.checkedAt
+			}
+		}
+		if !oldest.IsZero() {
+			merged.CheckedAt = oldest
+		}
+		result[account.ID] = merged
 	}
 	return result
+}
+
+// pickWindow returns a copy of the best window among snaps, or nil when no
+// snapshot has usable data for it.
+func pickWindow(snaps []Snapshot, get func(Snapshot) *Window) *Window {
+	var best *Window
+	for _, snap := range snaps {
+		w := get(snap)
+		if !w.hasData() {
+			continue
+		}
+		cand := *w
+		cand.checkedAt = snap.CheckedAt
+		if best == nil || windowBeats(&cand, best) {
+			best = &cand
+		}
+	}
+	return best
+}
+
+// windowBeats reports whether a should replace b. A candidate with a
+// resets_at normally outranks one without, but not when the one without was
+// observed at or after that resets_at: its window had already ended by then,
+// so the newer observation is the current one.
+func windowBeats(a, b *Window) bool {
+	switch {
+	case a.ResetsAt != nil && b.ResetsAt == nil:
+		if b.checkedAt.Before(*a.ResetsAt) {
+			return true
+		}
+	case a.ResetsAt == nil && b.ResetsAt != nil:
+		if a.checkedAt.Before(*b.ResetsAt) {
+			return false
+		}
+	case a.ResetsAt != nil && !a.ResetsAt.Equal(*b.ResetsAt):
+		return a.ResetsAt.After(*b.ResetsAt)
+	case a.ResetsAt != nil && *a.UsedPercentage != *b.UsedPercentage:
+		return *a.UsedPercentage > *b.UsedPercentage
+	}
+	return a.checkedAt.After(b.checkedAt)
 }
 
 // Row is one rendered line of the usage table.
@@ -184,8 +267,11 @@ func BuildRows(accountRows []struct{ ID, Label string }, matches map[string]Snap
 // say the same thing -- a 5-hour window's snapshot older than 5 hours has
 // certainly reset, and likewise for the 7-day window at 7 days.
 func windowText(w *Window, checkedAt time.Time, length time.Duration, label string, now time.Time) string {
-	if w == nil || w.UsedPercentage == nil {
+	if !w.hasData() {
 		return "–"
+	}
+	if !w.checkedAt.IsZero() {
+		checkedAt = w.checkedAt
 	}
 	if w.ResetsAt != nil {
 		if !w.ResetsAt.After(now) {

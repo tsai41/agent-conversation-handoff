@@ -1,11 +1,17 @@
 package main
 
 import (
+	"bytes"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/tsai41/agent-conversation-handoff/internal/registry"
+	"github.com/tsai41/agent-conversation-handoff/internal/usage"
 )
 
 // TestBareInvocationDefaultsToMenu locks in that `ccs`/`ach` with no
@@ -43,5 +49,145 @@ func TestBareInvocationDefaultsToMenu(t *testing.T) {
 	}
 	if !strings.Contains(got, "已取消初次設定") {
 		t.Fatalf("expected the bootstrap cancellation line, got: %s", got)
+	}
+}
+
+// `usage record` sits inside a status line pipeline: it must print nothing,
+// exit 0 on input it cannot use, and leave a snapshot the menu's reader
+// shows for the account whose config dir it ran under.
+func TestUsageRecordWritesSnapshotTheReaderShows(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "ach")
+	if out, err := exec.Command("go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
+		t.Fatalf("build failed: %v\n%s", err, out)
+	}
+	usageDir := filepath.Join(t.TempDir(), "usage")
+	accountHome := t.TempDir()
+	reset := strconv.FormatInt(time.Now().Add(time.Hour).Unix(), 10)
+
+	tests := []struct {
+		name      string
+		stdin     string
+		wantFiles int
+	}{
+		{"malformed json", "not json", 0},
+		{"no rate_limits", `{"model":{}}`, 0},
+		{"both windows", `{"rate_limits":{"five_hour":{"used_percentage":42,"resets_at":` + reset + `},"seven_day":{"used_percentage":9,"resets_at":` + reset + `}}}`, 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := filepath.Join(usageDir, strings.ReplaceAll(tt.name, " ", "-"))
+			cmd := exec.Command(binary, "usage", "record", "--usage-dir", dir)
+			cmd.Env = append(os.Environ(), "CLAUDE_CONFIG_DIR="+accountHome)
+			cmd.Stdin = strings.NewReader(tt.stdin)
+			var stdout bytes.Buffer
+			cmd.Stdout = &stdout
+			if err := cmd.Run(); err != nil {
+				t.Fatalf("expected exit 0, got %v", err)
+			}
+			if stdout.Len() != 0 {
+				t.Fatalf("expected no stdout, got %q", stdout.String())
+			}
+			entries, _ := os.ReadDir(dir)
+			if len(entries) != tt.wantFiles {
+				t.Fatalf("expected %d snapshot files, got %d", tt.wantFiles, len(entries))
+			}
+			if tt.wantFiles == 0 {
+				return
+			}
+			snaps, err := usage.LoadDir(dir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			matches := usage.MatchLatest([]registry.Account{{ID: "claude-1", Home: accountHome}}, snaps)
+			rows := usage.BuildRows([]struct{ ID, Label string }{{"claude-1", "Claude 1"}}, matches, time.Now())
+			if !strings.HasPrefix(rows[0].FiveHour, "42%") || !strings.HasPrefix(rows[0].SevenDay, "9%") {
+				t.Fatalf("expected the recorded percentages, got %+v", rows[0])
+			}
+		})
+	}
+}
+
+// With no CLAUDE_CONFIG_DIR and no resolvable home there is no account to
+// record for; the status line must still see a clean exit 0.
+func TestUsageRecordWithoutAnyHomeExitsQuietly(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "ach")
+	if out, err := exec.Command("go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
+		t.Fatalf("build failed: %v\n%s", err, out)
+	}
+	dir := filepath.Join(t.TempDir(), "usage")
+	reset := strconv.FormatInt(time.Now().Add(time.Hour).Unix(), 10)
+
+	var env []string
+	for _, kv := range os.Environ() {
+		if !strings.HasPrefix(kv, "CLAUDE_CONFIG_DIR=") && !strings.HasPrefix(kv, "HOME=") && !strings.HasPrefix(kv, "ACH_CONFIG_DIR=") {
+			env = append(env, kv)
+		}
+	}
+	cmd := exec.Command(binary, "usage", "record", "--usage-dir", dir)
+	cmd.Dir = t.TempDir()
+	cmd.Env = append(env, "HOME=")
+	cmd.Stdin = strings.NewReader(`{"rate_limits":{"five_hour":{"used_percentage":42,"resets_at":` + reset + `}}}`)
+	var out bytes.Buffer
+	cmd.Stdout = &out
+	cmd.Stderr = &out
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("expected exit 0, got %v\n%s", err, out.String())
+	}
+	if out.Len() != 0 {
+		t.Fatalf("expected no output, got %q", out.String())
+	}
+	if entries, _ := os.ReadDir(dir); len(entries) != 0 {
+		t.Fatalf("expected no snapshot files, got %d", len(entries))
+	}
+}
+
+// A bad registry must not be touched by the writer: registry.Load would move
+// it aside into a .corrupt- backup, and a status line runs this on every
+// refresh.
+func TestUsageRecordLeavesACorruptRegistryAlone(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "ach")
+	if out, err := exec.Command("go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
+		t.Fatalf("build failed: %v\n%s", err, out)
+	}
+	home := t.TempDir()
+	registryDir := t.TempDir()
+	registryPath := filepath.Join(registryDir, "accounts.json")
+	const corrupt = "{not json"
+	if err := os.WriteFile(registryPath, []byte(corrupt), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	stdin := `{"rate_limits":{"five_hour":{"used_percentage":42}}}`
+	defaultDir := filepath.Join(home, ".config", "agent-conversation-handoff", "usage")
+	flagDir := filepath.Join(t.TempDir(), "flag-usage")
+
+	tests := []struct {
+		name    string
+		args    []string
+		wantDir string
+	}{
+		{"default dir", []string{"usage", "record", "--registry", registryPath}, defaultDir},
+		{"flag dir", []string{"usage", "record", "--registry", registryPath, "--usage-dir", flagDir}, flagDir},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cmd := exec.Command(binary, tt.args...)
+			cmd.Env = append(os.Environ(), "HOME="+home, "CLAUDE_CONFIG_DIR="+filepath.Join(home, ".claude"))
+			cmd.Stdin = strings.NewReader(stdin)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("expected exit 0, got %v\n%s", err, out)
+			}
+			entries, err := os.ReadDir(tt.wantDir)
+			if err != nil || len(entries) != 1 {
+				t.Fatalf("expected one snapshot in %s, got %v (err %v)", tt.wantDir, entries, err)
+			}
+			backups, _ := filepath.Glob(registryPath + ".corrupt-*")
+			if len(backups) != 0 {
+				t.Fatalf("expected no .corrupt- backup, got %v", backups)
+			}
+			raw, _ := os.ReadFile(registryPath)
+			if string(raw) != corrupt {
+				t.Fatalf("registry was modified: %q", raw)
+			}
+		})
 	}
 }

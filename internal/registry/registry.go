@@ -79,7 +79,7 @@ func SchemaProblem(r Registry) string {
 		if account.Home == "" {
 			return fmt.Sprintf("%s.home must be a non-empty string", prefix)
 		}
-		resolvedHome, err := resolveHome(account.Home)
+		resolvedHome, err := ResolveHome(account.Home)
 		if err != nil {
 			return fmt.Sprintf("%s.home is invalid", prefix)
 		}
@@ -108,7 +108,10 @@ func SchemaProblem(r Registry) string {
 	return ""
 }
 
-func resolveHome(home string) (string, error) {
+// ResolveHome expands a leading ~ and returns the absolute, cleaned form of
+// home. It is the one normalisation shared by account homes and snapshot
+// config_dir values.
+func ResolveHome(home string) (string, error) {
 	expanded, err := expandUser(home)
 	if err != nil {
 		return "", err
@@ -154,6 +157,26 @@ func Load(path string) (Registry, error) {
 		return Registry{}, fmt.Errorf("unsupported account registry: %s: %s; backup: %s", path, problem, backup)
 	}
 	return r, nil
+}
+
+// PeekUsageDir returns the registry's stored usage_dir without validating the
+// registry and without touching the file: no backup, no lock, no write. Any
+// failure (missing file, bad JSON, schema problem, unresolvable path) yields
+// "", so it picks the same directory the menu does.
+func PeekUsageDir(path string) string {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	var r Registry
+	if json.Unmarshal(raw, &r) != nil || SchemaProblem(r) != "" || r.UsageDir == "" {
+		return ""
+	}
+	dir, err := ResolveHome(r.UsageDir)
+	if err != nil {
+		return ""
+	}
+	return dir
 }
 
 func LoadOrEmpty(path string) (Registry, error) {
@@ -209,12 +232,12 @@ func WithLock(path string, fn func() error) error {
 }
 
 func Register(r *Registry, provider string, accountHome string, alias string, createHome bool) (Account, error) {
-	resolvedHome, err := resolveHome(accountHome)
+	resolvedHome, err := ResolveHome(accountHome)
 	if err != nil {
 		return Account{}, err
 	}
 	for _, item := range r.Accounts {
-		itemHome, err := resolveHome(item.Home)
+		itemHome, err := ResolveHome(item.Home)
 		if err == nil && itemHome == resolvedHome {
 			return Account{}, fmt.Errorf("account home is already registered: %s", resolvedHome)
 		}
@@ -314,7 +337,7 @@ func SetUsageDir(path string, usageDir string) (string, error) {
 			r.UsageDir = ""
 			return Save(path, r)
 		}
-		resolved, err = resolveHome(usageDir)
+		resolved, err = ResolveHome(usageDir)
 		if err != nil {
 			return err
 		}
@@ -348,7 +371,7 @@ func Discover(path string) ([]DiscoveredAccount, error) {
 			return nil, err
 		}
 		for _, account := range r.Accounts {
-			home, err := resolveHome(account.Home)
+			home, err := ResolveHome(account.Home)
 			if err == nil {
 				registered[home] = true
 			}
@@ -418,7 +441,7 @@ func SuggestAccountHome(path string, provider string) (string, error) {
 	}
 	registeredHomes := map[string]bool{}
 	for _, account := range r.Accounts {
-		home, err := resolveHome(account.Home)
+		home, err := ResolveHome(account.Home)
 		if err == nil {
 			registeredHomes[home] = true
 		}

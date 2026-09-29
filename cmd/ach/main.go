@@ -7,11 +7,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/tsai41/agent-conversation-handoff/internal/handoff"
 	"github.com/tsai41/agent-conversation-handoff/internal/menu"
 	"github.com/tsai41/agent-conversation-handoff/internal/provider"
 	"github.com/tsai41/agent-conversation-handoff/internal/registry"
+	"github.com/tsai41/agent-conversation-handoff/internal/usage"
 )
 
 func defaultRegistryPath() string {
@@ -120,6 +122,35 @@ func main() {
 			fail(err)
 		}
 		if err := menu.RegistryHandoff(*registryPath, *sourceID, *targetID, *sessionPath, cwd, !*noLaunch); err != nil {
+			fail(err)
+		}
+
+	case "usage":
+		if len(args) < 1 || args[0] != "record" {
+			fail(fmt.Errorf("usage: ccs usage record [--usage-dir dir] < statusline.json"))
+		}
+		fs := flag.NewFlagSet("usage record", flag.ExitOnError)
+		registryPath := fs.String("registry", defaultRegistryPath(), "")
+		usageDir := fs.String("usage-dir", defaultUsageDir(), "")
+		fs.Parse(args[1:])
+		usageDirSet := false
+		fs.Visit(func(f *flag.Flag) {
+			if f.Name == "usage-dir" {
+				usageDirSet = true
+			}
+		})
+		configDir := os.Getenv("CLAUDE_CONFIG_DIR")
+		if configDir == "" {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				return
+			}
+			configDir = filepath.Join(home, ".claude")
+		}
+		dir := usage.ResolveRecordDir(*registryPath, *usageDir, usageDirSet)
+		// Unusable input exits 0 inside Record so a status line is never
+		// broken by it; only a failed write reaches here.
+		if err := usage.Record(os.Stdin, dir, configDir, time.Now()); err != nil {
 			fail(err)
 		}
 

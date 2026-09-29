@@ -14,6 +14,7 @@ import (
 
 	"github.com/tsai41/agent-conversation-handoff/internal/registry"
 	"github.com/tsai41/agent-conversation-handoff/internal/session"
+	"github.com/tsai41/agent-conversation-handoff/internal/usage"
 )
 
 // captureStdout runs f with os.Stdout redirected to a pipe and returns
@@ -588,11 +589,8 @@ func TestUsageViewWithNoSnapshotDirectoryShowsNoDataForEveryAccount(t *testing.T
 	if strings.Contains(stdout, "0%") {
 		t.Fatalf("expected no window to render as 0%%, got: %s", stdout)
 	}
-	if !strings.Contains(stdout, "status line") {
-		t.Fatalf("expected a hint that usage data comes from the status line program, got: %s", stdout)
-	}
-	if !strings.Contains(stdout, crumbAccounts+" > "+crumbStatusline) {
-		t.Fatalf("expected the hint to name the menu path to enable it, got: %s", stdout)
+	if !strings.Contains(stdout, "ccs usage record") {
+		t.Fatalf("expected a hint naming the reference writer, got: %s", stdout)
 	}
 	if strings.Count(stdout, usageDir) != 1 {
 		t.Fatalf("expected the directory to be named exactly once (the reading-from line, not repeated by the no-data hint too), got: %s", stdout)
@@ -632,8 +630,8 @@ func TestUsageViewWithAnEmptySnapshotDirectoryShowsNoDataForEveryAccount(t *test
 	if strings.Count(stdout, "沒有資料") < 2 {
 		t.Fatalf("expected every row to be marked as having no data, got: %s", stdout)
 	}
-	if !strings.Contains(stdout, "status line") {
-		t.Fatalf("expected a hint that usage data comes from the status line program, got: %s", stdout)
+	if !strings.Contains(stdout, "ccs usage record") {
+		t.Fatalf("expected a hint naming the reference writer, got: %s", stdout)
 	}
 	if _, err := os.Stat(filepath.Join(calls, "rows-1")); err != nil {
 		t.Fatalf("expected a second root-level pick after the usage view, got: %v", err)
@@ -1104,7 +1102,7 @@ func TestResolveUsageDirPrefersExplicitFlagOverStored(t *testing.T) {
 	}
 
 	flagValue := filepath.Join(dir, "flag-usage")
-	if got := resolveUsageDir(registryPath, flagValue, true); got != flagValue {
+	if got := ResolveUsageDir(registryPath, flagValue, true); got != flagValue {
 		t.Fatalf("expected an explicit flag to win over the stored setting, got %q", got)
 	}
 }
@@ -1118,7 +1116,7 @@ func TestResolveUsageDirUsesStoredValueWhenNoFlagPassed(t *testing.T) {
 	}
 
 	builtinDefault := filepath.Join(dir, "builtin-default")
-	if got := resolveUsageDir(registryPath, builtinDefault, false); got != stored {
+	if got := ResolveUsageDir(registryPath, builtinDefault, false); got != stored {
 		t.Fatalf("expected the stored setting to be used when the flag was not explicit, got %q", got)
 	}
 }
@@ -1128,8 +1126,41 @@ func TestResolveUsageDirFallsBackToBuiltinDefaultWhenNothingStored(t *testing.T)
 	registryPath := filepath.Join(dir, "accounts.json")
 	builtinDefault := filepath.Join(dir, "builtin-default")
 
-	if got := resolveUsageDir(registryPath, builtinDefault, false); got != builtinDefault {
+	if got := ResolveUsageDir(registryPath, builtinDefault, false); got != builtinDefault {
 		t.Fatalf("expected the built-in default when nothing is stored, got %q", got)
+	}
+}
+
+func TestResolveUsageDirMatchesTheWritersDirForATildeUsageDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	registryPath := filepath.Join(t.TempDir(), "accounts.json")
+	if err := os.WriteFile(registryPath, []byte(`{"version":1,"next_number":{"claude":1,"codex":1},"accounts":[],"usage_dir":"~/x"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fallback := filepath.Join(home, "builtin-default")
+
+	want := filepath.Join(home, "x")
+	if got := ResolveUsageDir(registryPath, fallback, false); got != want {
+		t.Fatalf("menu resolved %q, want %q", got, want)
+	}
+	if got := usage.ResolveRecordDir(registryPath, fallback, false); got != want {
+		t.Fatalf("writer resolved %q, want %q", got, want)
+	}
+}
+
+func TestResolveUsageDirAndTheWriterAgreeOnASchemaInvalidRegistry(t *testing.T) {
+	registryPath := filepath.Join(t.TempDir(), "accounts.json")
+	if err := os.WriteFile(registryPath, []byte(`{"version":99,"next_number":{"claude":1,"codex":1},"accounts":[],"usage_dir":"/stored"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fallback := "/builtin-default"
+
+	if got := ResolveUsageDir(registryPath, fallback, false); got != fallback {
+		t.Fatalf("menu resolved %q, want the built-in default", got)
+	}
+	if got := usage.ResolveRecordDir(registryPath, fallback, false); got != fallback {
+		t.Fatalf("writer resolved %q, want the built-in default", got)
 	}
 }
 
@@ -1218,125 +1249,6 @@ func TestManageAccountsClearsUsageDirectoryOnEmptyInput(t *testing.T) {
 	}
 	if updated.UsageDir != "" {
 		t.Fatalf("expected an empty input to clear the stored directory, got %q", updated.UsageDir)
-	}
-}
-
-// writeClaudeSettings writes a minimal, realistic settings.json (a
-// statusLine.command among other keys) as the claude account's shared
-// settings document.
-func writeClaudeSettings(t *testing.T, claudeHome, command string) {
-	t.Helper()
-	doc := fmt.Sprintf(`{
-  "model": "opusplan",
-  "statusLine": {
-    "type": "command",
-    "command": %q,
-    "padding": 0
-  },
-  "hooks": {}
-}
-`, command)
-	if err := os.WriteFile(filepath.Join(claudeHome, "settings.json"), []byte(doc), 0o644); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestManageAccountsOffersStatuslineAction(t *testing.T) {
-	home := t.TempDir()
-	runWithFakePath(t, home)
-
-	claudeHome := filepath.Join(home, ".claude")
-	codexHome := filepath.Join(home, ".codex")
-	os.MkdirAll(claudeHome, 0o755)
-	os.MkdirAll(codexHome, 0o755)
-	writeClaudeSettings(t, claudeHome, "~/.claude/statusline-go")
-
-	registryPath := filepath.Join(home, "accounts.json")
-	writeRegistry(t, registryPath, claudeHome, codexHome)
-
-	calls := fakeFzf(t, home, key("accounts"), cancel(), key("chat"), key("claude-1"), key("new"))
-	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
-	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
-
-	if _, stderr, err := runMenu(t, registryPath, home, ""); err != nil {
-		t.Fatalf("menu run failed: %v\nstderr: %s", err, stderr)
-	}
-	actions := callFile(t, calls, "rows-1")
-	if !strings.Contains(actions, "狀態列設定") {
-		t.Fatalf("expected 帳號設定 to offer 狀態列設定, got: %s", actions)
-	}
-}
-
-// Enabling from the menu must write --usage-dir into the shared
-// settings.json and tell the user where the pre-write backup went.
-func TestManageAccountsStatuslineEnablesUsageDir(t *testing.T) {
-	home := t.TempDir()
-	runWithFakePath(t, home)
-
-	claudeHome := filepath.Join(home, ".claude")
-	codexHome := filepath.Join(home, ".codex")
-	os.MkdirAll(claudeHome, 0o755)
-	os.MkdirAll(codexHome, 0o755)
-	writeClaudeSettings(t, claudeHome, "~/.claude/statusline-go")
-
-	registryPath := filepath.Join(home, "accounts.json")
-	writeRegistry(t, registryPath, claudeHome, codexHome)
-	usageDir := filepath.Join(home, "usage")
-
-	fakeFzf(t, home, key("accounts"), key("statusline"), key("enable"), cancel(), key("chat"), key("claude-1"), key("new"))
-	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
-	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
-
-	stdout, stderr, err := runMenuWithUsageDir(t, registryPath, usageDir, home, "")
-	if err != nil {
-		t.Fatalf("menu run failed: %v\nstderr: %s", err, stderr)
-	}
-	if !strings.Contains(stdout, "已更新") || !strings.Contains(stdout, "已備份") {
-		t.Fatalf("expected a confirmation naming the backup, got: %s", stdout)
-	}
-	raw, err := os.ReadFile(filepath.Join(claudeHome, "settings.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(string(raw), "--usage-dir "+usageDir) {
-		t.Fatalf("expected settings.json to carry --usage-dir %s, got: %s", usageDir, raw)
-	}
-}
-
-// A settings.json with no statusLine must be reported, with guidance, and
-// never written to.
-func TestManageAccountsStatuslineRefusesWhenStatusLineMissing(t *testing.T) {
-	home := t.TempDir()
-	runWithFakePath(t, home)
-
-	claudeHome := filepath.Join(home, ".claude")
-	codexHome := filepath.Join(home, ".codex")
-	os.MkdirAll(claudeHome, 0o755)
-	os.MkdirAll(codexHome, 0o755)
-	if err := os.WriteFile(filepath.Join(claudeHome, "settings.json"), []byte(`{"model":"opusplan"}`), 0o644); err != nil {
-		t.Fatal(err)
-	}
-
-	registryPath := filepath.Join(home, "accounts.json")
-	writeRegistry(t, registryPath, claudeHome, codexHome)
-
-	fakeFzf(t, home, key("accounts"), key("statusline"), cancel(), key("chat"), key("claude-1"), key("new"))
-	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
-	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
-
-	stdout, stderr, err := runMenu(t, registryPath, home, "")
-	if err != nil {
-		t.Fatalf("menu run failed: %v\nstderr: %s", err, stderr)
-	}
-	if !strings.Contains(stdout, "無法判讀") || !strings.Contains(stdout, "<path-to-your-status-line-executable>") {
-		t.Fatalf("expected a refusal message with a pasteable snippet, got: %s", stdout)
-	}
-	raw, err := os.ReadFile(filepath.Join(claudeHome, "settings.json"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(raw) != `{"model":"opusplan"}` {
-		t.Fatal("a refused statusline action modified the document")
 	}
 }
 
