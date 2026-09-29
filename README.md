@@ -294,7 +294,7 @@ ach h bbbbbbbb
 - `make build`：建置 `dist/ach-darwin-<arch>`。
 - `go test ./...`：跑全部測試（`make test` 是同一件事）。
 
-`skills/`、`docs/plans/` 與 `.omc/skills/` 是維護者自己用的 agent 工作流程文件，使用工具不需要讀。`.omc/skills/` 是維護者的 agent 進入點，內容指向 `skills/` 裡的發版與安裝流程。
+`skills/` 是維護者給 coding agent 用的開發、發版與安裝流程，使用工具不需要讀。
 
 
 ## 安全性回報
