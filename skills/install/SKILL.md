@@ -28,8 +28,9 @@ destination to `<path>.bak-$(date +%Y%m%d-%H%M%S)`, and installs the new one.
    back up the existing executable to `<path>.bak-$(date +%Y%m%d-%H%M%S)`
    (the name `ach uninstall` recognises and cleans up), then move the verified
    file into place. Say that this fallback was used.
-5. Report the installed path, the published release version, the checksum
-   result, and the backup path when one was made.
+5. Report the installed path, the published release version (the installer
+   prints it on its first line), the checksum result, and the backup path
+   when one was made.
 
 An existing symlink at the destination is replaced without a backup; mention
 it if the destination was a symlink.

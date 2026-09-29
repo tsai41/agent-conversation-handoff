@@ -49,7 +49,7 @@ brew install fzf
 curl -fsSL https://raw.githubusercontent.com/tsai41/agent-conversation-handoff/main/install.sh | bash
 ```
 
-會依本機 arch 從最新的 GitHub Release 下載對應的 `ach` 二進位到 `~/bin/ach`，並用 release 附的 `SHA256SUMS` 驗證。若要改安裝路徑，或用別的名字安裝（`COMMAND=<name>`）：
+會依本機 arch 從最新的 GitHub Release 下載對應的 `ach` 二進位到 `~/bin/ach`，並用 release 附的 `SHA256SUMS` 驗證。過程每個步驟印一行，並標出實際安裝的版本；失敗時會說明卡在哪一步，以及沒有安裝任何東西。若要改安裝路徑，或用別的名字安裝（`COMMAND=<name>`）：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/tsai41/agent-conversation-handoff/main/install.sh | COMMAND=myname BIN_DIR=~/bin bash
