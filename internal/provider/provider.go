@@ -164,7 +164,8 @@ func launchThroughShell(account registry.Account, dir string, args ...string) er
 // as its single argument (used to point a freshly-handed-off session at its
 // transcript).
 func Launch(account registry.Account, prompt string) error {
-	return launchThroughShell(account, "", prompt)
+	// "--" keeps a wrapper's variadic options (claude --add-dir) from consuming the prompt.
+	return launchThroughShell(account, "", "--", prompt)
 }
 
 // LaunchSession replaces the current process with the provider CLI, no

@@ -719,7 +719,7 @@ func TestHandoffUsesAnIDTypedIntoTheSearchBox(t *testing.T) {
 
 	launched := filepath.Join(home, "launched")
 	writeScript(t, filepath.Join(home, "bin", "claude"), fmt.Sprintf(
-		"#!/usr/bin/env bash\nif [ \"$1 $2\" = 'auth status' ]; then exit 0; fi\nprintf '%%s|%%s' \"$CLAUDE_CONFIG_DIR\" \"$1\" > %q\n",
+		"#!/usr/bin/env bash\nif [ \"$1 $2\" = 'auth status' ]; then exit 0; fi\nprintf '%%s|%%s' \"$CLAUDE_CONFIG_DIR\" \"$*\" > %q\n",
 		launched,
 	))
 	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
@@ -749,6 +749,9 @@ func TestHandoffUsesAnIDTypedIntoTheSearchBox(t *testing.T) {
 	}
 	if !strings.Contains(string(launchedContent), "transcript.md") {
 		t.Fatalf("expected the claude account to be launched at the new artifact, got %q", launchedContent)
+	}
+	if !strings.Contains(string(launchedContent), "|-- ") {
+		t.Fatalf("expected the prompt after \"--\" so wrapper options cannot consume it, got %q", launchedContent)
 	}
 
 	var sourcePath string
@@ -799,7 +802,7 @@ func TestHandoffPicksSourceThenConversationThenTarget(t *testing.T) {
 
 	launched := filepath.Join(home, "launched")
 	writeScript(t, filepath.Join(home, "bin", "codex"), fmt.Sprintf(
-		"#!/usr/bin/env bash\nif [ \"$1 $2\" = 'login status' ]; then exit 0; fi\nprintf '%%s|%%s' \"$CODEX_HOME\" \"$1\" > %q\n",
+		"#!/usr/bin/env bash\nif [ \"$1 $2\" = 'login status' ]; then exit 0; fi\nprintf '%%s|%%s' \"$CODEX_HOME\" \"$*\" > %q\n",
 		launched,
 	))
 	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
@@ -946,7 +949,7 @@ func TestQuickHandoffByIDFindsClaudeConversationAndLaunchesCodex(t *testing.T) {
 
 	launched := filepath.Join(home, "launched")
 	writeScript(t, filepath.Join(home, "bin", "codex"), fmt.Sprintf(
-		"#!/usr/bin/env bash\nif [ \"$1 $2\" = 'login status' ]; then exit 0; fi\nprintf '%%s|%%s' \"$CODEX_HOME\" \"$1\" > %q\n", launched,
+		"#!/usr/bin/env bash\nif [ \"$1 $2\" = 'login status' ]; then exit 0; fi\nprintf '%%s|%%s' \"$CODEX_HOME\" \"$*\" > %q\n", launched,
 	))
 	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
 
