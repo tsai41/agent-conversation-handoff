@@ -27,6 +27,16 @@ make the smallest coherent change, test it, and report the result.
 - Provider launch behavior must preserve the selected account environment and
   the user's project-specific shell wrapper. Do not bypass it with an ad hoc
   binary invocation.
+- Tests never touch the real home directory. Use `t.Setenv("HOME",
+  t.TempDir())` and pass explicit registry paths. For `uninstall.Run`, also
+  inject `Options.Executable` and `Options.TempDir` so the run never looks
+  at the test binary or the real temp directory. Registry, share-settings
+  and trust-sync tests follow the same rule.
+- Every account list goes through `registry.DisplayOrder` or
+  `registry.Rows`, so archived accounts sort last. Do not sort accounts by ID
+  string: `claude-10` would come before `claude-2`.
+- `ach usage record` runs inside a status line. It prints nothing to stdout
+  and exits 0 on unusable input; only a failed snapshot write may fail it.
 
 ## Completion
 
