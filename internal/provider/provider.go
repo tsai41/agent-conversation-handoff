@@ -74,57 +74,54 @@ func command(account registry.Account) string {
 	return "codex"
 }
 
-// Launch replaces the current process with the provider CLI, passing prompt
-// as its single argument (used to point a freshly-handed-off session at its
-// transcript).
-func Launch(account registry.Account, prompt string) error {
+// shellLaunchArgs invokes the provider command through the user's login zsh.
+// This preserves project-specific shell functions such as wrappers that add
+// repository context before calling the real provider CLI.
+func shellLaunchArgs(providerCommand string, args ...string) []string {
+	return append([]string{"zsh", "-lic", `"$@"`, "ccs-launch", providerCommand}, args...)
+}
+
+func launchThroughShell(account registry.Account, args ...string) error {
 	env, err := environment(account)
 	if err != nil {
 		return err
 	}
-	binary, err := exec.LookPath(command(account))
-	if err != nil {
+	providerCommand := command(account)
+	if _, err := exec.LookPath(providerCommand); err != nil {
 		return err
 	}
+	shell, err := exec.LookPath("zsh")
+	if err != nil {
+		return fmt.Errorf("zsh is required: %w", err)
+	}
 	fmt.Println(launchBanner(account))
-	return syscall.Exec(binary, []string{command(account), prompt}, env)
+	return syscall.Exec(shell, shellLaunchArgs(providerCommand, args...), env)
+}
+
+// Launch replaces the current process with the provider CLI, passing prompt
+// as its single argument (used to point a freshly-handed-off session at its
+// transcript).
+func Launch(account registry.Account, prompt string) error {
+	return launchThroughShell(account, prompt)
 }
 
 // LaunchSession replaces the current process with the provider CLI, no
 // arguments (used to just open the account's normal interactive session).
 func LaunchSession(account registry.Account) error {
-	env, err := environment(account)
-	if err != nil {
-		return err
-	}
-	binary, err := exec.LookPath(command(account))
-	if err != nil {
-		return err
-	}
-	fmt.Println(launchBanner(account))
-	return syscall.Exec(binary, []string{command(account)}, env)
+	return launchThroughShell(account)
 }
 
 // ResumeSession replaces the current process with the provider CLI resuming
 // the named session for account.
 func ResumeSession(account registry.Account, sessionID string) error {
-	env, err := environment(account)
-	if err != nil {
-		return err
-	}
-	binary, err := exec.LookPath(command(account))
-	if err != nil {
-		return err
-	}
 	if sessionID == "" {
 		return fmt.Errorf("session id is required")
 	}
-	args := []string{command(account), "--resume", sessionID}
+	args := []string{"--resume", sessionID}
 	if account.Provider == "codex" {
-		args = []string{command(account), "resume", sessionID}
+		args = []string{"resume", sessionID}
 	}
-	fmt.Println(launchBanner(account))
-	return syscall.Exec(binary, args, env)
+	return launchThroughShell(account, args...)
 }
 
 // launchBanner is the one line left in the terminal's scrollback above a

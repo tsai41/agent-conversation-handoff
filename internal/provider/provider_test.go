@@ -58,3 +58,11 @@ func TestLaunchBannerOmitsAnEmptyAlias(t *testing.T) {
 		t.Fatalf("expected no alias gap, got %q", got)
 	}
 }
+
+func TestShellLaunchArgsInvokeTheConfiguredCommandThroughZsh(t *testing.T) {
+	got := shellLaunchArgs("claude", "--resume", "session-id")
+	want := []string{"zsh", "-lic", `"$@"`, "ccs-launch", "claude", "--resume", "session-id"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+}
