@@ -159,7 +159,13 @@ func main() {
 		if fs.NArg() != 0 {
 			fail(fmt.Errorf("usage: ach uninstall [--registry path] [--yes]"))
 		}
-		failed := uninstall.Run(uninstall.Options{RegistryPath: *registryPath, Execute: *yes, Out: os.Stdout})
+		registrySet := false
+		fs.Visit(func(f *flag.Flag) {
+			if f.Name == "registry" {
+				registrySet = true
+			}
+		})
+		failed := uninstall.Run(uninstall.Options{RegistryPath: *registryPath, RegistrySet: registrySet, Execute: *yes, Out: os.Stdout})
 		if failed == uninstall.Refused {
 			os.Exit(1)
 		}

@@ -1096,3 +1096,93 @@ func TestRegistryDeleteFailureKeepsBinary(t *testing.T) {
 		t.Errorf("registry or binary gone after the registry delete failed:\n%s", out.String())
 	}
 }
+
+func TestRerunCommand(t *testing.T) {
+	tests := []struct {
+		name    string
+		adjust  func(t *testing.T, f fixture, o *Options)
+		execute bool
+		want    func(f fixture) string
+	}{
+		{
+			name: "dry-run footer uses the invoked name",
+			adjust: func(t *testing.T, f fixture, o *Options) {
+				o.Executable = func() (string, error) { return filepath.Join(f.root, "bin", "ach-dev"), nil }
+			},
+			want: func(fixture) string { return "確認無誤後執行：ach-dev uninstall --yes" },
+		},
+		{
+			name: "an explicit registry is passed on",
+			adjust: func(t *testing.T, f fixture, o *Options) {
+				o.RegistrySet = true
+			},
+			want: func(f fixture) string {
+				return "確認無誤後執行：ach uninstall --registry " + f.regPath + " --yes"
+			},
+		},
+		{
+			name: "a registry path with a space is quoted",
+			adjust: func(t *testing.T, f fixture, o *Options) {
+				regPath := filepath.Join(f.root, "my config", "accounts.json")
+				writeRegistry(t, regPath, "", f.acc1, f.acc2)
+				o.RegistryPath = regPath
+				o.RegistrySet = true
+			},
+			want: func(f fixture) string {
+				return "ach uninstall --registry '" + filepath.Join(f.root, "my config", "accounts.json") + "' --yes"
+			},
+		},
+		{
+			name: "a single quote in the registry path is escaped",
+			adjust: func(t *testing.T, f fixture, o *Options) {
+				o.RegistryPath = "/tmp/it's/accounts.json"
+				o.RegistrySet = true
+			},
+			want: func(fixture) string {
+				return `ach uninstall --registry '/tmp/it'\''s/accounts.json' --yes`
+			},
+		},
+		{
+			name: "a command name with a space is quoted",
+			adjust: func(t *testing.T, f fixture, o *Options) {
+				o.Executable = func() (string, error) { return filepath.Join(f.root, "bin", "my ach"), nil }
+			},
+			want: func(fixture) string { return "'my ach' uninstall --yes" },
+		},
+		{
+			name: "invoked path that is not the running file still names the command",
+			adjust: func(t *testing.T, f fixture, o *Options) {
+				o.Executable = func() (string, error) {
+					return "", &notRunningError{invoked: filepath.Join(f.root, "bin", "ach2"), running: f.bin}
+				}
+			},
+			want: func(fixture) string { return "ach2 uninstall --yes" },
+		},
+		{
+			name:    "re-run hint after a failure",
+			execute: true,
+			adjust: func(t *testing.T, f fixture, o *Options) {
+				if err := os.Chmod(f.acc2, 0o500); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { os.Chmod(f.acc2, 0o755) })
+				o.RegistrySet = true
+			},
+			want: func(f fixture) string { return "重跑 ach uninstall --registry " + f.regPath + " --yes" },
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			f := newFixture(t, "")
+			var out bytes.Buffer
+			opts := f.options(tt.execute, &out)
+			tt.adjust(t, f, &opts)
+
+			Run(opts)
+
+			if want := tt.want(f); !strings.Contains(out.String(), want) {
+				t.Errorf("output lacks %q:\n%s", want, out.String())
+			}
+		})
+	}
+}

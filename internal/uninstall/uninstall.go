@@ -30,6 +30,9 @@ const (
 
 type Options struct {
 	RegistryPath string
+	// RegistrySet reports that --registry was passed, so the re-run command
+	// printed at the end must pass it too.
+	RegistrySet bool
 	// Execute is false for the default dry-run, which prints the plan and
 	// changes nothing.
 	Execute bool
@@ -832,9 +835,35 @@ func (u *run) footer() {
 		u.say("  %d. %s", i+3, item)
 	}
 	if u.keepRegistry {
-		u.say("\nregistry 與執行檔已保留：修正上面的問題後重跑 ach uninstall --yes")
+		u.say("\nregistry 與執行檔已保留：修正上面的問題後重跑 %s", u.rerunCommand())
 	}
 	if !u.Execute {
-		u.say("\n以上只是預覽，沒有任何檔案被改動。確認無誤後執行：ach uninstall --yes")
+		u.say("\n以上只是預覽，沒有任何檔案被改動。確認無誤後執行：%s", u.rerunCommand())
 	}
+}
+
+// rerunCommand spells the executing command the way this run was invoked,
+// so the user can paste it as is.
+func (u *run) rerunCommand() string {
+	name := "ach"
+	exe, err := u.Executable()
+	var notRunning *notRunningError
+	switch {
+	case err == nil:
+		name = filepath.Base(exe)
+	case errors.As(err, &notRunning):
+		name = filepath.Base(notRunning.invoked)
+	}
+	cmd := shellQuote(name) + " uninstall"
+	if u.RegistrySet {
+		cmd += " --registry " + shellQuote(u.regPath)
+	}
+	return cmd + " --yes"
+}
+
+func shellQuote(s string) string {
+	if s != "" && strings.Trim(s, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789/._-+") == "" {
+		return s
+	}
+	return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'"
 }
