@@ -59,10 +59,7 @@ type run struct {
 	// configDone is false when step 3 did not get as far as deciding which
 	// files to delete, so the directory must not be finished off either.
 	configDone bool
-	// refused is set when the config directory failed the ownership checks,
-	// so nothing in it is touched, not even the lock file.
-	refused bool
-	planned map[string]bool
+	planned    map[string]bool
 	// restored holds entry paths a dry-run plans to put back from an aside
 	// link, so the preview can still show them being replaced by a copy.
 	restored map[string]bool
@@ -74,8 +71,12 @@ var (
 	removeFile = os.Remove
 )
 
+// Refused is returned by Run when it declined to touch anything, as opposed
+// to a count of items that failed.
+const Refused = -1
+
 // Run performs (or previews) the uninstall and returns how many items
-// failed. A failure never stops the remaining items.
+// failed, or Refused. A failure never stops the remaining items.
 func Run(o Options) int {
 	if o.Executable == nil {
 		o.Executable = invokedPath
@@ -87,15 +88,27 @@ func Run(o Options) int {
 
 	if filepath.Base(o.RegistryPath) != registryName {
 		u.say("拒絕執行：--registry 必須指向 %s，收到的是 %s", registryName, o.RegistryPath)
-		return 1
+		return Refused
 	}
 	dir, err := filepath.Abs(filepath.Dir(o.RegistryPath))
 	if err != nil {
 		u.say("拒絕執行：無法解析 %s：%s", o.RegistryPath, err)
-		return 1
+		return Refused
 	}
 	u.dir = dir
 	u.regPath = filepath.Join(dir, registryName)
+
+	_, statErr := os.Stat(dir)
+	if statErr != nil && !errors.Is(statErr, fs.ErrNotExist) {
+		u.say("拒絕執行：無法確認設定目錄 %s：%s。沒有做任何變更。", dir, statErr)
+		return Refused
+	}
+	if statErr == nil {
+		if reason := u.configDirRefusal(); reason != "" {
+			u.say("拒絕執行：不處理 %s，因為%s。沒有做任何變更。", dir, reason)
+			return Refused
+		}
+	}
 
 	if o.Execute {
 		u.say("執行解除安裝：")
@@ -103,11 +116,7 @@ func Run(o Options) int {
 		u.say("預覽模式：以下動作都不會執行，確認後加上 --yes 才會實際進行。")
 	}
 
-	_, statErr := os.Stat(dir)
-	if statErr == nil {
-		u.checkConfigDir()
-	}
-	if o.Execute && statErr == nil && !u.refused {
+	if o.Execute && statErr == nil {
 		if err := registry.WithLock(u.regPath, func() error { u.steps(); return nil }); err != nil {
 			u.fail("無法鎖定 registry：%s", err)
 			u.keepRegistry = true
@@ -128,28 +137,23 @@ func Run(o Options) int {
 	return u.failed
 }
 
-// checkConfigDir refuses a config directory that is the home directory, an
-// ancestor of it, or holds an account home. It runs before the registry lock
-// is taken, because taking it creates a lock file in that directory.
-func (u *run) checkConfigDir() {
+// configDirRefusal returns why the config directory must not be touched:
+// it is the home directory, an ancestor of it, or holds an account home. It
+// runs before anything else, because even the registry lock creates a file
+// in that directory.
+func (u *run) configDirRefusal() string {
 	dir := u.dir
-	reason := ""
 	if home, err := os.UserHomeDir(); err == nil && (dir == "/" || dir == home || inside(home, dir)) {
-		reason = "它是家目錄或其上層"
-	} else if reg, state, _ := readRegistry(u.regPath); state == registryOK {
+		return "它是家目錄或其上層"
+	}
+	if reg, state, _ := readRegistry(u.regPath); state == registryOK {
 		for _, account := range resolveHomes(reg).Accounts {
 			if inside(account.Home, dir) {
-				reason = "帳號目錄 " + account.Home + " 在裡面"
-				break
+				return "帳號目錄 " + account.Home + " 在裡面"
 			}
 		}
 	}
-	if reason == "" {
-		return
-	}
-	u.fail("拒絕處理 %s：%s", dir, reason)
-	u.refused = true
-	u.keepRegistry = true
+	return ""
 }
 
 // steps runs steps 1 to 3, under the registry lock when executing.
@@ -627,10 +631,6 @@ func (u *run) configDir(state registryState) {
 	dir := u.dir
 	if _, err := os.Lstat(dir); os.IsNotExist(err) {
 		u.say("  設定目錄不存在，略過：%s", dir)
-		return
-	}
-	if u.refused {
-		u.say("  略過 %s：已拒絕處理這個目錄", dir)
 		return
 	}
 	names, err := os.ReadDir(dir)

@@ -407,13 +407,39 @@ func TestRegistryNotNamedAccountsJSONIsRefused(t *testing.T) {
 	var out bytes.Buffer
 	opts := f.options(true, &out)
 	opts.RegistryPath = filepath.Join(project, "package.json")
-	if failed := Run(opts); failed == 0 {
+	if failed := Run(opts); failed != Refused {
 		t.Fatalf("package.json was accepted:\n%s", out.String())
 	}
 	if !strings.Contains(out.String(), "拒絕執行") {
 		t.Errorf("refusal not explained:\n%s", out.String())
 	}
 	assertSameTree(t, before, snapshot(t, f.root))
+}
+
+func TestUnverifiableConfigDirIsRefused(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root can stat anything")
+	}
+	f := newFixture(t, "")
+	parent := filepath.Join(f.root, "locked")
+	write(t, filepath.Join(parent, "config", "accounts.json"), "{}", 0o644)
+	if err := os.Chmod(parent, 0); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(parent, 0o755) })
+
+	var out bytes.Buffer
+	opts := f.options(true, &out)
+	opts.RegistryPath = filepath.Join(parent, "config", "accounts.json")
+	if failed := Run(opts); failed != Refused {
+		t.Fatalf("want Refused, got %d:\n%s", failed, out.String())
+	}
+	if !strings.Contains(out.String(), "無法確認設定目錄") {
+		t.Errorf("refusal not explained:\n%s", out.String())
+	}
+	if strings.Contains(out.String(), "步驟") {
+		t.Errorf("steps ran after the refusal:\n%s", out.String())
+	}
 }
 
 func TestProjectRegistryDeletesOnlyItself(t *testing.T) {
@@ -859,7 +885,7 @@ func TestConfigDirGuards(t *testing.T) {
 			setup: func(t *testing.T, f fixture) (string, string) {
 				regPath := filepath.Join(f.home, "accounts.json")
 				writeRegistry(t, regPath, "", f.acc1, f.acc2)
-				return regPath, "拒絕處理 " + f.home + "：它是家目錄或其上層"
+				return regPath, "拒絕執行：不處理 " + f.home + "，因為它是家目錄或其上層"
 			},
 		},
 		{
@@ -870,7 +896,7 @@ func TestConfigDirGuards(t *testing.T) {
 				mkdir(t, nested)
 				regPath := filepath.Join(holder, "accounts.json")
 				writeRegistry(t, regPath, "", f.acc1, f.acc2, nested)
-				return regPath, "拒絕處理 " + holder + "：帳號目錄 " + nested + " 在裡面"
+				return regPath, "拒絕執行：不處理 " + holder + "，因為帳號目錄 " + nested + " 在裡面"
 			},
 		},
 	}
@@ -878,6 +904,7 @@ func TestConfigDirGuards(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			f := newFixture(t, "")
 			regPath, wantOut := tt.setup(t, f)
+			before := snapshot(t, f.root)
 
 			var out bytes.Buffer
 			opts := f.options(true, &out)
@@ -887,15 +914,13 @@ func TestConfigDirGuards(t *testing.T) {
 			if failed == 0 || !strings.Contains(out.String(), wantOut) {
 				t.Fatalf("failed = %d, want %q in output:\n%s", failed, wantOut, out.String())
 			}
-			if !exists(regPath) || !exists(f.acc1) {
-				t.Error("guarded directory lost its registry")
+			if strings.Contains(out.String(), "步驟") {
+				t.Errorf("a step ran although the directory was refused:\n%s", out.String())
 			}
-			if exists(regPath + ".lock") {
-				t.Error("a lock file was created in the refused directory")
+			if !isSymlink(filepath.Join(f.acc2, "settings.json")) || !isSymlink(filepath.Join(f.acc2, "skills")) {
+				t.Error("a shared link was replaced although the directory was refused")
 			}
-			if !exists(f.bin) {
-				t.Errorf("binary deleted although the directory was refused:\n%s", out.String())
-			}
+			assertSameTree(t, before, snapshot(t, f.root))
 		})
 	}
 }

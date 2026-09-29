@@ -160,6 +160,9 @@ func main() {
 			fail(fmt.Errorf("usage: ach uninstall [--registry path] [--yes]"))
 		}
 		failed := uninstall.Run(uninstall.Options{RegistryPath: *registryPath, Execute: *yes, Out: os.Stdout})
+		if failed == uninstall.Refused {
+			os.Exit(1)
+		}
 		if failed > 0 {
 			fmt.Fprintf(os.Stderr, "Error: %d 個項目失敗\n", failed)
 			os.Exit(1)

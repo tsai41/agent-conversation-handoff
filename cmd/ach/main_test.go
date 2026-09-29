@@ -308,3 +308,25 @@ func TestUninstallSubcommand(t *testing.T) {
 		})
 	}
 }
+
+func TestUninstallRefusalExitsWithoutCount(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "ach")
+	if out, err := exec.Command("go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
+		t.Fatalf("build failed: %v\n%s", err, out)
+	}
+	home := t.TempDir()
+	cmd := exec.Command(binary, "uninstall", "--yes", "--registry", filepath.Join(home, "accounts.json"))
+	cmd.Env = append(os.Environ(), "HOME="+home)
+	out, err := cmd.CombinedOutput()
+
+	var exitErr *exec.ExitError
+	if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
+		t.Fatalf("want exit 1, got %v\n%s", err, out)
+	}
+	if !strings.Contains(string(out), "拒絕執行") {
+		t.Errorf("refusal not explained:\n%s", out)
+	}
+	if strings.Contains(string(out), "Error:") {
+		t.Errorf("refusal printed a failure count:\n%s", out)
+	}
+}
