@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"syscall"
 	"time"
 )
@@ -42,6 +43,24 @@ var sharedEntries = map[string][]SettingsEntry{
 		{Name: "config.toml", Kind: EntryFile},
 		{Name: "skills", Kind: EntryDir},
 	},
+}
+
+// SharedEntries returns the entries accounts of a provider share; nil for a
+// provider with nothing shared.
+func SharedEntries(provider string) []SettingsEntry {
+	return append([]SettingsEntry(nil), sharedEntries[provider]...)
+}
+
+// ClassifyEntry judges account's entry against the primary account's, the
+// same way sharing does.
+func ClassifyEntry(primary, account Account, entry SettingsEntry) (EntryState, error) {
+	return entryState(EntryPath(primary, entry), EntryPath(account, entry), entry.Kind)
+}
+
+// IsBackupName reports whether name is exactly a backup freeBackupPath makes
+// for base: base.bak-<time> with an optional collision counter.
+func IsBackupName(base, name string) bool {
+	return regexp.MustCompile("^" + regexp.QuoteMeta(base) + `\.bak-\d{8}-\d{6}(-\d+)?$`).MatchString(name)
 }
 
 func EntryPath(account Account, entry SettingsEntry) string {

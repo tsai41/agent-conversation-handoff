@@ -275,18 +275,34 @@ ach h bbbbbbbb
 
 ## 移除
 
-依序處理：
+先預覽，不會改動任何檔案：
 
-1. 先把 `ach usage record` 從 Claude Code 的 status line 腳本拿掉（沒設定過就跳過）。
-2. 解除「共用設定」。對每個共用過的帳號 home，找出指向第一個帳號的 symlink 項目（`settings.json`、`skills/` 等），刪掉 symlink，再從來源帳號複製實體檔案（目錄用 `cp -R`）過來。不要在解除共用前刪掉第一個帳號的 home，否則其他帳號的連結會全部斷掉。
-3. 刪除指令：`~/bin/ach`（或你用 `COMMAND` 指定的名字）。
-4. 刪除設定：`~/.config/agent-conversation-handoff/`（registry 與用量 snapshot；帳號目錄本身不會動）。若設過 `ACH_CONFIG_DIR`，刪除它指定的目錄。若用 `設定用量資料目錄` 指到別處，該目錄要另外刪。
-5. 刪除交接資料：每個專案底下的 `.agent-handoffs/`。
-6. 刪除備份：
-   - `~/bin/ach.bak-*`（安裝時替換舊指令留下的，名字跟著 `COMMAND`）。
-   - 各帳號 home 裡的 `<名稱>.bak-<時間>`（共用設定時搬開的原檔）。
-   - `.claude.json.bak-*`：同步專案信任時建立，在各 Claude 帳號的 `.claude.json` 旁邊（`~/.claude` 帳號在 `~/.claude.json.bak-*`）。
+```bash
+ach uninstall
+```
 
+確認清單無誤後，先關掉其他正在跑的 ach，再執行：
+
+```bash
+ach uninstall --yes
+```
+
+`ach uninstall` 依下列順序處理，執行時逐項印出結果，單項失敗會回報並繼續處理其餘項目，有失敗時以非零狀態結束：
+
+1. 解除共用設定：把非第一個帳號裡、指向第一個同 provider 帳號的 symlink 換成實體複本（目錄保留檔案權限，目錄裡的相對連結改成指向原本那個檔案的絕對路徑）。指向別處的 symlink 與第一個帳號本身都不動；第一個帳號缺少對應項目時，連結保留並回報。上次執行中斷留下的 `<名稱>.uninstall-link` 與 `.<名稱>.uninstall-*` 會先放回或清掉（只看非第一個帳號，名稱不是共用項目的只列出來）。
+2. 列出備份，不刪除：共用設定時留下的 `<名稱>.bak-<時間>`，以及同步專案信任留下的 `.claude.json.bak-*`（`~/.claude` 帳號在 `~/.claude.json.bak-*`），是各帳號共用前自己的原始設定。`ach uninstall` 只把路徑列在「仍需手動處理」，確認不需要後再自行刪除。
+3. 清理設定目錄：registry 所在的目錄（預設 `~/.config/agent-conversation-handoff/`，或 `ACH_CONFIG_DIR` 指定的目錄）裡只刪 ach 自己的檔案：`accounts.json`、`accounts.json.lock`、`accounts.json.corrupt-*`（registry 保留時一併保留並列出）、`auth-cache.json`，以及預設的 `usage/`（`設定用量資料目錄` 指到別處、或裡面有快照以外的東西時不刪，只列出來）。目錄清空後才刪掉目錄本身；裡面還有其他東西就保留，並列出剩下的名字。`--registry` 的檔名不是 `accounts.json` 時直接拒絕執行；目錄是家目錄、家目錄的上層、或包含帳號目錄時，這個目錄整個不碰（連鎖定檔都不建），registry 與執行檔也保留。
+4. 刪除 `ach` 執行檔（以你呼叫它的路徑為準）與同目錄的 `<指令名>.bak-<時間>`。那個路徑是 symlink 時只刪連結，連結指向的檔案列出來讓你自行處理；那個路徑與實際在跑的執行檔不是同一個檔案時兩個都不刪，列出來讓你自行處理。執行檔不在可寫入的位置、或是 `go run` 的暫存建置時略過並說明。
+
+步驟 1 有項目失敗、registry 讀不了或刪不掉、或設定目錄被拒絕處理時，registry 與執行檔都會保留，好讓帳號資料還找得到：修正問題（或修好 registry）後重跑 `ach uninstall --yes`，已完成的項目會略過。
+
+不會動：帳號目錄本身、認證資料、session、共用前的原始設定備份、各專案的 `.agent-handoffs/`，以及你的 status line。以下要自己處理：
+
+- 刪除交接資料：`ach uninstall` 結束時會印出 `find` 指令，用來找出各專案底下的 `.agent-handoffs/`。
+- 把 `ach usage record` 從 Claude Code 的 status line 腳本拿掉（沒設定過就跳過）。
+- 確認不需要後，刪除步驟 2 列出的備份。
+
+沒有可用的 `ach` 時，手動做法：先解除共用設定（找出指向第一個帳號的 symlink，刪掉後從來源複製實體檔案，目錄用 `cp -R`；不要先刪第一個帳號的 home），再刪 `~/bin/ach` 與設定目錄裡上面列出的檔案。各處的 `.bak-*` 是共用前的原始設定，確認不需要再刪。
 
 ## 開發
 

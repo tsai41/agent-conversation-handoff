@@ -13,6 +13,7 @@ import (
 	"github.com/tsai41/agent-conversation-handoff/internal/menu"
 	"github.com/tsai41/agent-conversation-handoff/internal/provider"
 	"github.com/tsai41/agent-conversation-handoff/internal/registry"
+	"github.com/tsai41/agent-conversation-handoff/internal/uninstall"
 	"github.com/tsai41/agent-conversation-handoff/internal/usage"
 )
 
@@ -148,6 +149,20 @@ func main() {
 		// broken by it; only a failed write reaches here.
 		if err := usage.Record(os.Stdin, dir, configDir, time.Now()); err != nil {
 			fail(err)
+		}
+
+	case "uninstall":
+		fs := flag.NewFlagSet("uninstall", flag.ExitOnError)
+		registryPath := fs.String("registry", defaultRegistryPath(), "")
+		yes := fs.Bool("yes", false, "")
+		fs.Parse(args)
+		if fs.NArg() != 0 {
+			fail(fmt.Errorf("usage: ach uninstall [--registry path] [--yes]"))
+		}
+		failed := uninstall.Run(uninstall.Options{RegistryPath: *registryPath, Execute: *yes, Out: os.Stdout})
+		if failed > 0 {
+			fmt.Fprintf(os.Stderr, "Error: %d 個項目失敗\n", failed)
+			os.Exit(1)
 		}
 
 	case "accounts":

@@ -182,6 +182,23 @@ func PeekUsageDir(path string) string {
 	return dir
 }
 
+// Peek reads and validates the registry without any side effect: unlike
+// Load it never writes a .corrupt- backup.
+func Peek(path string) (Registry, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return Registry{}, err
+	}
+	var r Registry
+	if err := json.Unmarshal(raw, &r); err != nil {
+		return Registry{}, fmt.Errorf("account registry is invalid JSON: %w", err)
+	}
+	if problem := SchemaProblem(r); problem != "" {
+		return Registry{}, fmt.Errorf("unsupported account registry: %s", problem)
+	}
+	return r, nil
+}
+
 func LoadOrEmpty(path string) (Registry, error) {
 	if _, err := os.Stat(path); os.IsNotExist(err) {
 		return Empty(), nil

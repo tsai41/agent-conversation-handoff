@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -224,6 +225,85 @@ func TestAccountsArchiveAndUnarchiveSubcommands(t *testing.T) {
 			}
 			if _, statErr := os.Stat(accountHome); statErr != nil {
 				t.Fatalf("the account directory must be untouched: %v", statErr)
+			}
+		})
+	}
+}
+
+func TestUninstallSubcommand(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "ach")
+	if out, err := exec.Command("go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
+		t.Fatalf("build failed: %v\n%s", err, out)
+	}
+	home := t.TempDir()
+	config := filepath.Join(home, "config")
+	env := append(os.Environ(), "HOME="+home, "ACH_CONFIG_DIR="+config)
+	seed := func(t *testing.T) {
+		t.Helper()
+		if err := os.RemoveAll(config); err != nil {
+			t.Fatal(err)
+		}
+		if err := registry.Save(filepath.Join(config, "accounts.json"), registry.Empty()); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(config, "auth-cache.json"), []byte("{}"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	listing := func(t *testing.T) []string {
+		t.Helper()
+		entries, err := os.ReadDir(config)
+		if err != nil {
+			return nil
+		}
+		var names []string
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		return names
+	}
+
+	tests := []struct {
+		name      string
+		args      []string
+		lockDir   bool
+		wantFail  bool
+		wantNames []string
+	}{
+		{"dry-run changes nothing", []string{"uninstall"}, false, false, []string{"accounts.json", "auth-cache.json"}},
+		{"extra positional arg is rejected", []string{"uninstall", "yes"}, false, true, []string{"accounts.json", "auth-cache.json"}},
+		{"--yes removes the config dir", []string{"uninstall", "--yes"}, false, false, nil},
+		{"a failed item exits 1", []string{"uninstall", "--yes"}, true, true, []string{"accounts.json", "auth-cache.json"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			seed(t)
+			if tt.lockDir {
+				if err := os.Chmod(config, 0o500); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { os.Chmod(config, 0o755) })
+			}
+			cmd := exec.Command(binary, tt.args...)
+			cmd.Env = env
+			out, err := cmd.CombinedOutput()
+			if tt.lockDir {
+				os.Chmod(config, 0o755)
+			}
+
+			var exitErr *exec.ExitError
+			if tt.wantFail {
+				if !errors.As(err, &exitErr) || exitErr.ExitCode() != 1 {
+					t.Fatalf("want exit 1, got %v\n%s", err, out)
+				}
+			} else if err != nil {
+				t.Fatalf("want exit 0, got %v\n%s", err, out)
+			}
+			if got := listing(t); strings.Join(got, ",") != strings.Join(tt.wantNames, ",") {
+				t.Fatalf("config dir = %v, want %v\n%s", got, tt.wantNames, out)
+			}
+			if _, err := os.Stat(binary); err != nil {
+				t.Fatalf("the temp-dir binary was deleted: %v", err)
 			}
 		})
 	}
