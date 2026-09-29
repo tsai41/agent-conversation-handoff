@@ -35,9 +35,8 @@ make the smallest coherent change, test it, and report the result.
   full applicable path without repeated confirmation: conventional commit,
   push, next appropriate semantic tag, wait for the GitHub release workflow,
   verify the published artifact, and install it.
-- Use the `release-and-install` skill for that path. Preserve any existing
-  Change-Id; amend fixes into the original commit only when the user requests
-  a fixup.
+- Use the `release` skill to publish and the `install` skill to install.
+  Amend fixes into the original commit only when the user requests a fixup.
 - For release installers, verify the current-platform artifact against its
   published checksum. Keep a timestamped backup before replacing an existing
   executable. If the installer cannot complete in the execution environment,

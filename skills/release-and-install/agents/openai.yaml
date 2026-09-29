@@ -1,3 +1,0 @@
-interface:
-  display_name: "Release and Install"
-  short_description: "Publish, install, and verify CLI releases"

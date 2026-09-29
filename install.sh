@@ -9,6 +9,11 @@ BIN_DIR="${BIN_DIR:-$HOME/bin}"
 COMMAND="${COMMAND:-ach}"
 DEST="$BIN_DIR/$COMMAND"
 
+[ "$(uname -s)" = "Darwin" ] || {
+	echo "ach 只支援 macOS，目前系統是 $(uname -s)。" >&2
+	exit 1
+}
+
 command -v claude >/dev/null 2>&1 || command -v codex >/dev/null 2>&1 || {
 	echo "找不到 claude 或 codex。請先安裝至少一個 CLI。" >&2
 	exit 1

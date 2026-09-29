@@ -45,7 +45,7 @@
 
 同一個帳號可能有多份 snapshot（多個寫入端、或同一個目錄的不同拼法）。讀取端不看檔案時間也不看現在時鐘，對每個帳號、每個視窗各自挑一個值：
 
-1. 有 `resets_at` 的候選優先於沒有的；都有時，`resets_at` 較晚的勝出，因為那是較新的視窗。例外：沒有 `resets_at` 的那份，若 `checked_at` 不早於對方的 `resets_at`，代表對方的視窗在它被觀察時已經結束，這時 `checked_at` 較晚的勝出。
+1. 有 `resets_at` 的候選優先於沒有的；都有時，`resets_at` 較晚的勝出，因為那是較新的視窗。例外：沒有 `resets_at` 的那份，若 `checked_at` 不早於有 `resets_at` 那份的 `resets_at`，代表那份的視窗在它被觀察時已經結束，這時 `checked_at` 較晚的勝出。
 2. `resets_at` 相同時，`used_percentage` 較大的勝出，因為同一個視窗內用量只會增加。閒置 session 常常用較新的 `checked_at` 重寫較舊、較低的數字，所以不能只比 `checked_at`。
 3. `resets_at` 與 `used_percentage` 都相同時，`checked_at` 較晚的勝出。沒有任何候選帶 `resets_at` 時，也是 `checked_at` 最晚的勝出。
 

@@ -3,28 +3,38 @@
 [![Release](https://img.shields.io/github/v/release/tsai41/agent-conversation-handoff)](https://github.com/tsai41/agent-conversation-handoff/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-在 Claude Code 與 Codex 的多個帳號之間安全交接對話。
+**English summary.** `ach` is a macOS terminal tool for people who keep several Claude Code and Codex subscription accounts. When one account runs out of quota, it hands the current conversation over to another account or to the other tool, so you can keep going in a new session. The source session is only read, never modified. The menu UI is Traditional Chinese only, and only macOS (arm64 and amd64) is supported.
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/tsai41/agent-conversation-handoff/main/install.sh | bash
+```
+
+適用情境：你有多個 Claude Code 或 Codex 訂閱帳號，其中一個額度用完時，把目前的對話交給另一個帳號或另一個工具，接著做下去。選單介面只有繁體中文，只支援 macOS。
 
 這是 handoff，不是跨帳號或跨工具 `resume`：來源 session 永遠只讀，目標帳號會開啟新對話並讀取完整的本機交接資料。
+
+輪替多個訂閱帳號是否符合各 provider 的服務條款，由使用者自行負責。
 
 ## 功能
 
 - 支援任意數量的 Claude 與 Codex 帳號。
-- 從一個 `ach` 選單直接啟動任一帳號：先選功能，再選帳號，每層都有數字快捷鍵與路徑列。啟動前會先印一行是哪個帳號（編號、alias、home），session 結束後往上捲還看得到。
+- 從一個 `ach` 選單直接啟動任一帳號：先選功能，再選帳號，選單項目有數字快捷鍵（對話清單除外），每層都有路徑列。啟動前會先印一行是哪個帳號（編號、alias、home），session 結束後往上捲還看得到。
 - 在目前專案內挑選來源對話，顯示對話建立時間、截斷 id 與第一句需求；知道 id 的話也可以直接打進搜尋框。
 - 新增帳號時可選擇與既有帳號共用同一份設定檔，之後改一次就全部生效。
-- Claude ↔ Claude、Claude ↔ Codex、Codex ↔ Codex 均使用同一套安全交接流程。
+- Claude ↔ Claude、Claude ↔ Codex、Codex ↔ Codex 均使用同一套交接流程。
 - 交接前使用 provider 官方 CLI 驗證目標帳號登入狀態。
 - alias 僅供選單辨識，不接觸 token、Keychain 或認證內容。
 
+
 ## 前置需求
 
+- macOS（arm64 或 amd64）。不支援 Linux，`install.sh` 在非 macOS 上會直接拒絕。
+- zsh。provider 一律透過 login zsh（`zsh -lic`）啟動，所以 `~/.zshrc` 裡替 `claude`、`codex` 設的 wrapper 或環境變數都會生效。
 - `fzf`
 - `curl`（macOS 內建）；若已安裝並登入 `gh`，安裝腳本會改用 gh 下載 release（選用）
 - Claude Code CLI（`claude`）或 Codex CLI（`codex`）至少一個
-- macOS（arm64 或 amd64）
 
-不需要 Go、不需要 python3——安裝的是預先編譯好的單一執行檔。
+不需要 Go、不需要 python3：安裝的是預先編譯好的單一執行檔。
 
 macOS 可用 Homebrew 安裝：
 
@@ -40,21 +50,29 @@ brew install fzf
 curl -fsSL https://raw.githubusercontent.com/tsai41/agent-conversation-handoff/main/install.sh | bash
 ```
 
-會依本機 arch 從最新的 GitHub Release 下載對應的 `ach` 二進位到 `~/bin/ach`。若要改指令名稱或安裝路徑：
+會依本機 arch 從最新的 GitHub Release 下載對應的 `ach` 二進位到 `~/bin/ach`，並用 release 附的 `SHA256SUMS` 驗證。若要改安裝路徑，或用別的名字安裝（`COMMAND=<name>`）：
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/tsai41/agent-conversation-handoff/main/install.sh | COMMAND=myalias BIN_DIR=~/bin bash
+curl -fsSL https://raw.githubusercontent.com/tsai41/agent-conversation-handoff/main/install.sh | COMMAND=myname BIN_DIR=~/bin bash
 ```
 
-若 `~/bin` 已有同名指令，安裝時會先建立時間戳備份。
+若目標路徑已有同名檔案，安裝時會先備份成 `ach.bak-<日期>-<時間>`。例外：目標若是 symlink，會直接被取代，不備份。
 
-只有要維護這個 repo（改程式、發新版）才需要 clone 並安裝 Go 工具鏈：
+macOS 預設的 PATH 不含 `~/bin`。安裝完若執行 `ach` 顯示 command not found，把它加進 PATH 並重新開啟終端（`install.sh` 偵測到 PATH 缺少時也會印出這行）：
 
 ```bash
-git clone git@github.com:tsai41/agent-conversation-handoff.git ~/go/src/agent-conversation-handoff
-cd ~/go/src/agent-conversation-handoff
-make install COMMAND=ach
+echo 'export PATH="$HOME/bin:$PATH"' >> ~/.zshrc
 ```
+
+從原始碼建置（需要 Go）：
+
+```bash
+git clone https://github.com/tsai41/agent-conversation-handoff.git
+cd agent-conversation-handoff
+make build
+```
+
+`make build` 會在 `dist/` 產出 `ach-darwin-arm64` 與 `ach-darwin-amd64`。只要本機這一種 arch，也可以 `go build -o ~/bin/ach ./cmd/ach`。注意 `make install` 不會建置，它跟上面的 `install.sh` 一樣是下載最新 release。
 
 ## 第一次執行
 
@@ -63,14 +81,6 @@ make install COMMAND=ach
 ```bash
 ach
 ```
-
-如果已經知道 Claude 對話 ID，推薦直接使用快捷模式：
-
-```bash
-ach h bbbbbbbb
-```
-
-快捷模式會自動搜尋所有已登記的 Claude 帳號，並交給已安裝的 Codex 帳號；只有多個 Codex 帳號可用時才會顯示目標選單。`quick-handoff` 是同一功能的完整別名。
 
 第一次執行會偵測常見既有帳號目錄，例如：
 
@@ -83,35 +93,43 @@ ach h bbbbbbbb
 ~/.codex-3
 ```
 
-舊式 `~/.codex-homes/*` 只會列為可匯入候選。每個候選都必須由你確認後才會加入 registry；不會看到目錄就擅自當成帳號。匯入時可選填 alias。
+每個候選都必須由你確認後才會加入 registry；不會看到目錄就擅自當成帳號。匯入時可選填 alias。
 
 首次匯入會在所有候選都確認完成後才一次寫入 registry。若中途取消，不會留下空白或只完成一半的 registry；下次執行會重新開始確認。
 
+若沒有偵測到任何既有帳號目錄，registry 會建成空的。進入主選單後，先到 `帳號設定` > `新增帳號` 建立第一個帳號。
+
 ## 主選單
 
-主選單只問要做什麼，選完功能才選帳號。每一層的項目前面都有數字，按對應數字鍵直接選（不用按 Enter），最多支援 9 個快捷鍵：
+主選單只問要做什麼，選完功能才選帳號。選單項目前面都有數字，按對應數字鍵直接選（不用按 Enter），最多支援 9 個快捷鍵。對話清單沒有數字快捷鍵，用搜尋框或方向鍵選。畫面上的文字如下，實際排版由 fzf 決定：
 
 ```text
+主選單
 1. 使用帳號對話
 2. 接手對話
 3. 帳號設定
 4. 查看用量
+選擇功能:
 ```
 
-選 `使用帳號對話` 之後才列出帳號。單一 provider 帳號只顯示 provider 名稱：
+選 `使用帳號對話` 之後才列出帳號。每個 provider 只有一個帳號時，只顯示 provider 名稱，即使設了 alias 也不會顯示：
 
 ```text
+主選單 > 使用帳號對話
 1. Claude
 2. Codex
+選擇帳號:
 ```
 
 同一 provider 有多個帳號時，顯示穩定編號；alias 有設定才附加：
 
 ```text
+主選單 > 使用帳號對話
 1. Claude · 1 · personal@example.com
 2. Claude · 2 · work@example.com
 3. Codex · 1
 4. Codex · 2 · work
+選擇帳號:
 ```
 
 選定帳號後可選擇「新開對話」或「繼續既有對話」。後者會列出該帳號在目前專案的最近對話，也可直接輸入 session ID；選定後以 provider 官方的 resume 指令開啟同一個 session。
@@ -125,87 +143,50 @@ ach h bbbbbbbb
 每個選單上方都有一條路徑列，標示現在在哪一層：
 
 ```text
-主選單 > 接手對話 > Claude · 1
+主選單 > 接手對話 > 來源 Agent：Claude · 1 > 選擇目標 Agent
 ```
 
-需要用鍵盤打字的地方也會先印出同一條路徑。設定 alias 與輸入對話編號時都適用。
+需要用鍵盤打字的地方也會先印出同一條路徑。設定 alias 與用量資料目錄時都適用。
 
 ## 帳號設定
 
 `帳號設定` 提供：
 
-- 新增帳號：選擇第一個尚未存在、也未登記的標準 home，然後啟動 provider 官方登入流程。home 後綴與選單中的穩定帳號編號彼此獨立。建立完會問要不要與第一個同 provider 帳號共用設定與能力（見下節），選了就逐項接 symlink，不選則留給 provider CLI 自己產生。
+- 新增帳號：選擇第一個尚未存在、也未登記的標準 home，然後啟動 provider 官方登入流程。home 後綴與選單中的穩定帳號編號彼此獨立。建立完會問要不要與第一個同 provider 帳號共用設定與能力（見下面「共用設定」一節），選了就逐項接 symlink，不選則留給 provider CLI 自己產生。
 - 修改 alias：alias 選填，只影響選單顯示。
 - 登入／重新登入：以選定帳號的 home 執行官方登入指令。
-- 共用設定到所有帳號：見下節。
+- 共用設定到所有帳號：見下面「共用設定」一節。
 - 從 ach 移除帳號：只取消 registry 登記，絕不刪除帳號目錄、session 或認證資料。
 - 匯入既有帳號目錄：只匯入你明確選擇的候選。
 - 設定用量資料目錄：見 [docs/usage-snapshot.md](docs/usage-snapshot.md)，設定後存在 registry 裡，不用每次都帶 `--usage-dir`。留空即清除設定，改用預設路徑。
-- 同步專案信任到其他帳號：見下面「同步專案信任到其他帳號」一節。
+- 同步專案信任到其他帳號：見 [docs/shared-settings.md](docs/shared-settings.md)。
+
 
 ### 共用設定
 
-同一個 provider 的帳號通常只差在登入的是哪個 token，設定與能力本身希望一致。`ach` 的做法是讓每個帳號的這些項目都是指向第一個同 provider 帳號的 symlink，所以改一次就全部生效，不需要事後同步 —— 沒有複製，也沒有「同步時機」。
+同一個 provider 的帳號可以共用設定與能力：`ach` 讓每個帳號的 `settings.json`、`skills/` 等項目成為指向第一個同 provider 帳號的 symlink，改一次全部生效。身分（token、Keychain）與對話（session、專案記錄）永遠各帳號獨立。
 
-需要各自獨立的只有兩類：身分（登入的是誰）與對話（session、專案記錄）。其餘的設定、權限、skill、agent 都共用。
+`同步專案信任到其他帳號` 則是另一件事：`.claude.json` 混著身分，不能用 symlink，只能把專案信任相關的白名單欄位一次性合併過去；跑之前請先關閉目標帳號的 Claude Code session。
 
-| provider | 共用的項目 | 不共用（各帳號獨立） |
-|---|---|---|
-| Claude | `settings.json`、`settings.local.json`、`skills/`、`commands/`、`agents/`、`plugins/` | `.credentials.json`、`.claude.json`、Keychain、`projects/`、`sessions/` |
-| Codex | `config.toml`、`skills/` | `auth.json`、`sessions/` |
+哪些項目共用、既有檔案怎麼處理、備份與鎖的細節，見 [docs/shared-settings.md](docs/shared-settings.md)。
 
-來源帳號沒有的項目就沒有東西可共用，會跳過。目錄項目連結的是整個目錄，不是逐檔比對。
 
-`plugins/` 共用後，每個 plugin 在所有帳號只會有一個安裝版本（裝在哪個帳號都一樣）。Claude Code 對這個目錄裡的安裝記錄沒有跨程序鎖，兩個帳號同時安裝或更新 plugin 時，後寫入的會蓋掉前一個的記錄；同一時間只在一個 session 裡裝 plugin 就不會碰到。
+## 設定檔位置
 
-### 同步專案信任到其他帳號
+帳號 registry 預設在 `~/.config/agent-conversation-handoff/accounts.json`，用量 snapshot 預設在同目錄的 `usage/`。設環境變數 `ACH_CONFIG_DIR` 可整個改放別處；`ach menu`（與直接執行 `ach` 相同）、`ach h` 與 `ach usage record` 也接受 `--registry <路徑>`，`ach menu` 與 `ach usage record` 另有 `--usage-dir <目錄>`，優先於環境變數。
 
-`.claude.json` 存放每個專案的信任與權限狀態（是否已通過信任對話框、`allowedTools`、MCP 伺服器允許清單等），但這份檔案跟帳號身分（`oauthAccount`、`userID`）、上線狀態與逐 session 統計資料是同一份，沒辦法像 `settings.json` 那樣用 symlink 共用——共用了身分也等於共用了登入。
+registry 寫入使用跨行程鎖與原子寫入，同時開多個 `ach` 不會互相覆蓋帳號異動。讀取時若 JSON 或結構損壞，工具會保留原檔、建立 `accounts.json.corrupt-<時間>` 備份並停止，不會自行覆寫重建。
 
-`帳號設定 > 同步專案信任到其他帳號` 改用「合併」而不是連結：選一個來源帳號，把它 `.claude.json` 裡下列白名單欄位，逐專案補進其他每個 Claude 帳號缺的地方——`hasTrustDialogAccepted`、`allowedTools`、`enabledMcpjsonServers`、`disabledMcpjsonServers`、`mcpContextUris`、`hasClaudeMdExternalIncludesApproved`。只補目標沒有的，既有值（包含明確的 `false`／`[]`／`{}`）一律不覆蓋，白名單以外的欄位、其他專案、與帳號身分完全不碰。
-
-這是一次性的合併，不是即時連結：來源帳號之後又信任了新專案，要再跑一次才會補到其他帳號。
-
-檔案位置跟啟動方式一致：home 是預設目錄 `~/.claude` 的帳號以未設 `CLAUDE_CONFIG_DIR` 啟動，它的檔案在 `~/.claude.json`；其他帳號在各自 home 底下的 `.claude.json`。寫入前一樣先備份成 `.claude.json.bak-<時間>`，寫入期間會建立跟 Claude Code 同一個 `.claude.json.lock` 目錄鎖，寫完即移除；鎖被別的 session 持有時略過該帳號並印出鎖的路徑，超過一分鐘沒更新的殘留鎖照 Claude Code 自己的判定視為已放棄，會清掉再寫。單一目標帳號失敗（例如它的檔案不是合法 JSON）只會在該行回報，其他帳號照常處理；`projects` 或其中某個專案不是物件時整份拒寫並回報原因，不做部分合併。目標帳號還沒執行過 Claude Code（沒有 `.claude.json`）或正有 session 在跑（`.claude.json.lock` 存在）時會略過該帳號並回報原因，不會建立檔案或搶寫。**跑之前請先關閉目標帳號的 Claude Code session**，否則它結束時寫回的內容會把這次合併蓋掉。
-
-憑證都不在共用的那些項目裡，所以共用設定不會讓帳號互相踩到登入狀態。
-
-`共用設定到所有帳號` 會把每個非第一順位的帳號都接過去，也是連結被弄斷之後的修復手段。
-
-每個共用項目各自判斷、各自成敗，一項失敗不會擋住其他項：
-
-| 帳號目前的該項目 | 處置 |
-|---|---|
-| 沒有 | 直接接上 |
-| 已經指向來源 | 略過 |
-| 自己一份，內容與來源不同 | 搬到 `<名稱>.bak-<時間>` 再接，並印出備份路徑 |
-| 自己一份的檔案，內容與來源相同 | 直接接上，不留備份（那份備份保存不了任何東西）|
-| 自己一份的目錄 | 一律保留備份，不做遞迴比對 |
-| 指向第三個地方的 symlink | 拒絕改動並回報 |
-| 種類不符（該是檔案卻是目錄，或反之）| 拒絕改動並回報 |
-
-備份不會互相覆蓋：同一秒內再接一次會換一個不重複的檔名。接的過程若在中途失敗，會把原本那份搬回去，不會留下一個少了設定檔或 skill 目錄的帳號。
-
-兩點要知道：
-
-- **有東西以「寫暫存檔再 rename」的方式存檔時，symlink 會被換成實體檔**，該帳號就靜默地不再共用。這種狀態跟「從來沒共用過」在檔案上看起來一樣，工具分不出來——重跑一次 `共用設定到所有帳號` 就能接回去。
-- **共用的是同一個實體檔案，所以 `chmod` 也是共用的。** 設定檔裡若有密鑰之類的東西，記得把權限收成 `600`。
-
-帳號 registry 位於：
-
-```text
-~/.config/agent-conversation-handoff/accounts.json
-```
-
-registry 使用跨程序鎖與原子寫入，避免同時開啟多個 `ach` 時互相覆蓋帳號異動。讀取時會驗證版本、必要欄位、帳號唯一性與下一個穩定編號；若 JSON 或結構損壞，工具會保留原檔、建立 `accounts.json.corrupt-<時間>` 備份並停止，不會自行覆寫重建。
 
 ## 查看用量
 
 `查看用量` 列出每個已登記帳號的 Claude 用量（5 小時與 7 天），資料來自別的程式寫下的 snapshot 檔，所以要先有寫入端。最簡單的做法是在 Claude Code 的 [status line](https://code.claude.com/docs/en/statusline) 腳本裡，把 stdin 餵一份給 `ach usage record`：
 
 ```bash
-input=$(cat); printf '%s' "$input" | ach usage record
+input=$(cat); printf '%s' "$input" | ~/bin/ach usage record
 ```
+
+status line 是由 Claude Code 啟動的子行程，它的 PATH 不一定含 `~/bin`，所以這裡寫絕對路徑。若你用 `COMMAND` 或 `BIN_DIR` 改過安裝位置，請換成實際路徑。
 
 `rate_limits` 只有 Claude Pro／Max 訂閱帳號才有。目錄、檔案格式、多份 snapshot 的選擇規則見 [docs/usage-snapshot.md](docs/usage-snapshot.md)。
 
@@ -222,11 +203,26 @@ input=$(cat); printf '%s' "$input" | ach usage record
 
 若目標未登入，流程會在建立 artifact 前停止並提示先登入。同一帳號不能同時作為來源與目標。
 
+### 快捷模式
+
+已經知道 Claude 對話 ID 時，可以跳過選單：
+
+```bash
+ach h bbbbbbbb
+```
+
+前提：
+
+- 已經執行過一次 `ach`，registry 已存在，否則會回報 registry 不存在。
+- 已登記至少一個 Codex 帳號，且它的 CLI 已安裝。快捷模式固定是 Claude → Codex：只搜尋已登記的 Claude 帳號，並交給 Codex 帳號；只有多個 Codex 帳號可用時才會顯示目標選單。其他方向請用選單。
+
+`quick-handoff` 是同一功能的完整別名。
+
 ### 直接輸入對話 ID
 
-對話清單只列目前專案、且只留最新 5 筆，所以你知道 id 的那個對話常常不在清單裡。第 2 步直接在搜尋框把 id 打進去就能指定，不用先選任何一列。清單最後那一列「✎ 輸入對話 ID」走的是同一條路徑，留著只是讓人知道有這個用法。
+對話清單只列目前專案、且只留最新 5 筆，所以你知道 id 的那個對話常常不在清單裡。第 2 步直接在搜尋框把 id 打進去就能指定，不用先選任何一列。
 
-- 可以只打前綴（例如 `bbbbbbbb`），大小寫不拘，至少 4 碼；多筆符合會依時間新到舊再讓你選一次。
+- 輸入 id 的任一片段（例如 `bbbbbbbb`）即可，至少 4 碼，不分大小寫；多筆符合會依時間新到舊再讓你選一次。
 - 會在所有已登記帳號裡找，來源帳號以實際找到的位置為準，不受第 1 步選的來源限制；接手帳號在來源確定之後才選。
 - 不限專案。對話若是在別的目錄開的，會先印出原本的目錄提醒你，交接資料仍建立在目前專案。
 - 專案完全沒有對話紀錄時一樣走得到。
@@ -259,8 +255,40 @@ input=$(cat); printf '%s' "$input" | ach usage record
 - artifact 先在私有暫存目錄完成，成功後才原子發布。
 - 建立失敗只清除暫存資料，來源 session 與既有 artifact 都保留。
 
-## 測試
 
-```bash
-make test
-```
+## 隱私
+
+`source.jsonl` 與 `transcript.md` 是整段對話的完整副本，裡面可能有貼過的密鑰或敏感內容。它們會一直留在該專案的 `.agent-handoffs/`，直到你手動刪除。目錄內的 `.gitignore` 只擋 git，擋不住雲端同步工具，也擋不住 Docker build context。交接給另一個組織的帳號，就是把這段對話的內容分享給該組織。
+
+
+## 移除
+
+依序處理：
+
+1. 先把 `ach usage record` 從 Claude Code 的 status line 腳本拿掉（沒設定過就跳過）。
+2. 解除「共用設定」。對每個共用過的帳號 home，找出指向第一個帳號的 symlink 項目（`settings.json`、`skills/` 等），刪掉 symlink，再從來源帳號複製實體檔案（目錄用 `cp -R`）過來。不要在解除共用前刪掉第一個帳號的 home，否則其他帳號的連結會全部斷掉。
+3. 刪除指令：`~/bin/ach`（或你用 `COMMAND` 指定的名字）。
+4. 刪除設定：`~/.config/agent-conversation-handoff/`（registry 與用量 snapshot；帳號目錄本身不會動）。若設過 `ACH_CONFIG_DIR`，刪除它指定的目錄。若用 `設定用量資料目錄` 指到別處，該目錄要另外刪。
+5. 刪除交接資料：每個專案底下的 `.agent-handoffs/`。
+6. 刪除備份：
+   - `~/bin/ach.bak-*`（安裝時替換舊指令留下的，名字跟著 `COMMAND`）。
+   - 各帳號 home 裡的 `<名稱>.bak-<時間>`（共用設定時搬開的原檔）。
+   - `.claude.json.bak-*`：同步專案信任時建立，在各 Claude 帳號的 `.claude.json` 旁邊（`~/.claude` 帳號在 `~/.claude.json.bak-*`）。
+
+
+## 開發
+
+- Go 1.26（見 `.github/workflows/release.yml`）。
+- `make build`：建置 `dist/ach-darwin-<arch>`。
+- `go test ./...`：跑全部測試（`make test` 是同一件事）。
+
+`skills/`、`docs/plans/` 與 `.omc/skills/` 是維護者自己用的 agent 工作流程文件，使用工具不需要讀。`.omc/skills/` 是維護者的 agent 進入點，內容指向 `skills/` 裡的發版與安裝流程。
+
+
+## 安全性回報
+
+發現安全問題請用 GitHub 的 [Security Advisories](https://github.com/tsai41/agent-conversation-handoff/security/advisories/new)（private vulnerability reporting）私下回報，不要開公開 issue。
+
+## 授權
+
+MIT，見 [LICENSE](LICENSE)。
