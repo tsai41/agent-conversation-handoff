@@ -589,7 +589,7 @@ func TestUsageViewWithNoSnapshotDirectoryShowsNoDataForEveryAccount(t *testing.T
 	if strings.Contains(stdout, "0%") {
 		t.Fatalf("expected no window to render as 0%%, got: %s", stdout)
 	}
-	if !strings.Contains(stdout, "ccs usage record") {
+	if !strings.Contains(stdout, "ach usage record") {
 		t.Fatalf("expected a hint naming the reference writer, got: %s", stdout)
 	}
 	if strings.Count(stdout, usageDir) != 1 {
@@ -630,7 +630,7 @@ func TestUsageViewWithAnEmptySnapshotDirectoryShowsNoDataForEveryAccount(t *test
 	if strings.Count(stdout, "沒有資料") < 2 {
 		t.Fatalf("expected every row to be marked as having no data, got: %s", stdout)
 	}
-	if !strings.Contains(stdout, "ccs usage record") {
+	if !strings.Contains(stdout, "ach usage record") {
 		t.Fatalf("expected a hint naming the reference writer, got: %s", stdout)
 	}
 	if _, err := os.Stat(filepath.Join(calls, "rows-1")); err != nil {

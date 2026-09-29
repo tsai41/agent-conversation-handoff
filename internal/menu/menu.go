@@ -742,7 +742,7 @@ func manageAccounts(registryPath string) error {
 			{"rename", "修改 alias"},
 			{"login", "登入／重新登入"},
 			{"share", "共用設定到所有帳號"},
-			{"remove", "從 ccs 移除帳號"},
+			{"remove", "從 ach 移除帳號"},
 			{"import", "匯入既有帳號目錄"},
 			{"usage-dir", "設定用量資料目錄"},
 			{"trust", "同步專案信任到其他帳號"},
@@ -912,7 +912,7 @@ func manageAccounts(registryPath string) error {
 				return err
 			}
 			confirmation, err := pickKey([]kv{
-				{"confirm", "只從 ccs 移除，保留所有帳號資料"},
+				{"confirm", "只從 ach 移除，保留所有帳號資料"},
 				{"cancel", "取消"},
 			}, actionCrumbs, "確認取消登記: ", true)
 			if err != nil {
@@ -1140,7 +1140,7 @@ func showUsage(registryPath, usageDir string) error {
 	usage.Fprint(os.Stdout, rows)
 	fmt.Printf("資料來源目錄：%s\n", usageDir)
 	if len(matches) == 0 {
-		fmt.Println("目前沒有任何帳號的用量資料：這份資料由外部程式寫入該目錄（可用 ccs usage record，見 README）。")
+		fmt.Println("目前沒有任何帳號的用量資料：這份資料由外部程式寫入該目錄（可用 ach usage record，見 README）。")
 	}
 	return nil
 }

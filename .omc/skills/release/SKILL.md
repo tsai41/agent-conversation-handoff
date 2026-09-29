@@ -1,6 +1,6 @@
 ---
 name: release
-description: Cut a new release of agent-conversation-handoff (ach/ccs) — tag, push, wait for the GitHub Actions build, then update the local binary. Triggers "release", "重新 release", "發 release", "cut a release", "出新版".
+description: Cut a new release of agent-conversation-handoff (ach) — tag, push, wait for the GitHub Actions build, then update the local binary. Triggers "release", "重新 release", "發 release", "cut a release", "出新版".
 ---
 
 # agent-conversation-handoff Release
@@ -42,7 +42,7 @@ Release with `generate_release_notes: true`).
    ```
    This downloads the just-published asset via `gh release download`,
    backs up any existing non-symlink binary at `$BIN_DIR/$COMMAND`
-   (default `~/bin/ccs`) to `<path>.bak-<timestamp>`, then installs the new
+   (default `~/bin/ach`) to `<path>.bak-<timestamp>`, then installs the new
    one. Safe to re-run.
 
 ## Gotchas

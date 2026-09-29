@@ -49,7 +49,7 @@ func TestSetEnvDoesNotMatchAKeyThatIsAPrefixOfAnother(t *testing.T) {
 
 func TestLaunchBannerNamesProviderNumberAliasAndHome(t *testing.T) {
 	got := launchBanner(registry.Account{ID: "claude-4", Provider: "claude", Number: 4, Alias: "work", Home: "/tmp/home-4"})
-	want := "ccs 啟動帳號：Claude #4 work（/tmp/home-4）"
+	want := "ach 啟動帳號：Claude #4 work（/tmp/home-4）"
 	if got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}
@@ -65,7 +65,7 @@ func TestLaunchBannerOmitsAnEmptyAlias(t *testing.T) {
 func TestShellLaunchArgsInvokeTheConfiguredCommandThroughZsh(t *testing.T) {
 	got := shellLaunchArgs("claude", "--resume", "session-id")
 	if len(got) != 7 || !reflect.DeepEqual(got[:2], []string{"zsh", "-lic"}) ||
-		!reflect.DeepEqual(got[3:], []string{"ccs-launch", "claude", "--resume", "session-id"}) {
+		!reflect.DeepEqual(got[3:], []string{"ach-launch", "claude", "--resume", "session-id"}) {
 		t.Fatalf("unexpected argv shape: %q", got)
 	}
 }

@@ -102,7 +102,7 @@ else
 fi
 builtin unset ACH_LAUNCH_CWD ACH_LAUNCH_PROVIDER ACH_LAUNCH_HOME ACH_LAUNCH_DEFAULT_CLAUDE_HOME
 "$@"`
-	return append([]string{"zsh", "-lic", launchScript, "ccs-launch", providerCommand}, args...)
+	return append([]string{"zsh", "-lic", launchScript, "ach-launch", providerCommand}, args...)
 }
 
 // launchDir returns dir when it is an existing directory, else the current
@@ -198,7 +198,7 @@ func launchBanner(account registry.Account) string {
 	if account.Alias != "" {
 		label += " " + account.Alias
 	}
-	return fmt.Sprintf("ccs 啟動帳號：%s（%s）", label, account.Home)
+	return fmt.Sprintf("ach 啟動帳號：%s（%s）", label, account.Home)
 }
 
 // Login replaces the current process with the provider CLI's login flow.

@@ -1,6 +1,6 @@
 ROOT := $(abspath $(dir $(lastword $(MAKEFILE_LIST))))
 BIN_DIR ?= $(HOME)/bin
-COMMAND ?= ccs
+COMMAND ?= ach
 DIST := $(ROOT)/dist
 
 .PHONY: install test build build-darwin-arm64 build-darwin-amd64

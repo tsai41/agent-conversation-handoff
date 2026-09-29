@@ -10,7 +10,7 @@
 ## 功能
 
 - 支援任意數量的 Claude 與 Codex 帳號。
-- 從一個 `ccs` 選單直接啟動任一帳號：先選功能，再選帳號，每層都有數字快捷鍵與路徑列。啟動前會先印一行是哪個帳號（編號、alias、home），session 結束後往上捲還看得到。
+- 從一個 `ach` 選單直接啟動任一帳號：先選功能，再選帳號，每層都有數字快捷鍵與路徑列。啟動前會先印一行是哪個帳號（編號、alias、home），session 結束後往上捲還看得到。
 - 在目前專案內挑選來源對話，顯示對話建立時間、截斷 id 與第一句需求；知道 id 的話也可以直接打進搜尋框。
 - 新增帳號時可選擇與既有帳號共用同一份設定檔，之後改一次就全部生效。
 - Claude ↔ Claude、Claude ↔ Codex、Codex ↔ Codex 均使用同一套安全交接流程。
@@ -40,7 +40,7 @@ brew install fzf
 curl -fsSL https://raw.githubusercontent.com/tsai41/agent-conversation-handoff/main/install.sh | bash
 ```
 
-會依本機 arch 從最新的 GitHub Release 下載對應的 `ach` 二進位到 `~/bin/ccs`。若要改指令名稱或安裝路徑：
+會依本機 arch 從最新的 GitHub Release 下載對應的 `ach` 二進位到 `~/bin/ach`。若要改指令名稱或安裝路徑：
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/tsai41/agent-conversation-handoff/main/install.sh | COMMAND=myalias BIN_DIR=~/bin bash
@@ -53,7 +53,7 @@ curl -fsSL https://raw.githubusercontent.com/tsai41/agent-conversation-handoff/m
 ```bash
 git clone git@github.com:tsai41/agent-conversation-handoff.git ~/go/src/agent-conversation-handoff
 cd ~/go/src/agent-conversation-handoff
-make install COMMAND=ccs
+make install COMMAND=ach
 ```
 
 ## 第一次執行
@@ -61,13 +61,13 @@ make install COMMAND=ccs
 在任意專案目錄執行：
 
 ```bash
-ccs
+ach
 ```
 
 如果已經知道 Claude 對話 ID，推薦直接使用快捷模式：
 
 ```bash
-ccs h bbbbbbbb
+ach h bbbbbbbb
 ```
 
 快捷模式會自動搜尋所有已登記的 Claude 帳號，並交給已安裝的 Codex 帳號；只有多個 Codex 帳號可用時才會顯示目標選單。`quick-handoff` 是同一功能的完整別名。
@@ -138,14 +138,14 @@ ccs h bbbbbbbb
 - 修改 alias：alias 選填，只影響選單顯示。
 - 登入／重新登入：以選定帳號的 home 執行官方登入指令。
 - 共用設定到所有帳號：見下節。
-- 從 ccs 移除帳號：只取消 registry 登記，絕不刪除帳號目錄、session 或認證資料。
+- 從 ach 移除帳號：只取消 registry 登記，絕不刪除帳號目錄、session 或認證資料。
 - 匯入既有帳號目錄：只匯入你明確選擇的候選。
 - 設定用量資料目錄：見 [docs/usage-snapshot.md](docs/usage-snapshot.md)，設定後存在 registry 裡，不用每次都帶 `--usage-dir`。留空即清除設定，改用預設路徑。
 - 同步專案信任到其他帳號：見下面「同步專案信任到其他帳號」一節。
 
 ### 共用設定
 
-同一個 provider 的帳號通常只差在登入的是哪個 token，設定與能力本身希望一致。`ccs` 的做法是讓每個帳號的這些項目都是指向第一個同 provider 帳號的 symlink，所以改一次就全部生效，不需要事後同步 —— 沒有複製，也沒有「同步時機」。
+同一個 provider 的帳號通常只差在登入的是哪個 token，設定與能力本身希望一致。`ach` 的做法是讓每個帳號的這些項目都是指向第一個同 provider 帳號的 symlink，所以改一次就全部生效，不需要事後同步 —— 沒有複製，也沒有「同步時機」。
 
 需要各自獨立的只有兩類：身分（登入的是誰）與對話（session、專案記錄）。其餘的設定、權限、skill、agent 都共用。
 
@@ -197,14 +197,14 @@ ccs h bbbbbbbb
 ~/.config/agent-conversation-handoff/accounts.json
 ```
 
-registry 使用跨程序鎖與原子寫入，避免同時開啟多個 `ccs` 時互相覆蓋帳號異動。讀取時會驗證版本、必要欄位、帳號唯一性與下一個穩定編號；若 JSON 或結構損壞，工具會保留原檔、建立 `accounts.json.corrupt-<時間>` 備份並停止，不會自行覆寫重建。
+registry 使用跨程序鎖與原子寫入，避免同時開啟多個 `ach` 時互相覆蓋帳號異動。讀取時會驗證版本、必要欄位、帳號唯一性與下一個穩定編號；若 JSON 或結構損壞，工具會保留原檔、建立 `accounts.json.corrupt-<時間>` 備份並停止，不會自行覆寫重建。
 
 ## 查看用量
 
-`查看用量` 列出每個已登記帳號的 Claude 用量（5 小時與 7 天），資料來自別的程式寫下的 snapshot 檔，所以要先有寫入端。最簡單的做法是在 Claude Code 的 [status line](https://code.claude.com/docs/en/statusline) 腳本裡，把 stdin 餵一份給 `ccs usage record`：
+`查看用量` 列出每個已登記帳號的 Claude 用量（5 小時與 7 天），資料來自別的程式寫下的 snapshot 檔，所以要先有寫入端。最簡單的做法是在 Claude Code 的 [status line](https://code.claude.com/docs/en/statusline) 腳本裡，把 stdin 餵一份給 `ach usage record`：
 
 ```bash
-input=$(cat); printf '%s' "$input" | ccs usage record
+input=$(cat); printf '%s' "$input" | ach usage record
 ```
 
 `rate_limits` 只有 Claude Pro／Max 訂閱帳號才有。目錄、檔案格式、多份 snapshot 的選擇規則見 [docs/usage-snapshot.md](docs/usage-snapshot.md)。

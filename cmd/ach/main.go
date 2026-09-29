@@ -44,7 +44,7 @@ func fail(err error) {
 }
 
 func main() {
-	// A bare `ccs`/`ach` invocation (no subcommand) opens the menu, same
+	// A bare `ach` invocation (no subcommand) opens the menu, same
 	// as the old bash launcher used to always run `ach menu --registry ...`.
 	command := "menu"
 	args := []string{}
@@ -59,7 +59,7 @@ func main() {
 		registryPath := fs.String("registry", defaultRegistryPath(), "")
 		fs.Parse(args)
 		if len(fs.Args()) != 1 {
-			fail(fmt.Errorf("usage: ccs h [--registry path] <conversation-id>"))
+			fail(fmt.Errorf("usage: ach h [--registry path] <conversation-id>"))
 		}
 		cwd, err := os.Getwd()
 		if err != nil {
@@ -127,7 +127,7 @@ func main() {
 
 	case "usage":
 		if len(args) < 1 || args[0] != "record" {
-			fail(fmt.Errorf("usage: ccs usage record [--usage-dir dir] < statusline.json"))
+			fail(fmt.Errorf("usage: ach usage record [--usage-dir dir] < statusline.json"))
 		}
 		fs := flag.NewFlagSet("usage record", flag.ExitOnError)
 		registryPath := fs.String("registry", defaultRegistryPath(), "")

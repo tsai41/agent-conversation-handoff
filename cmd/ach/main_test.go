@@ -14,7 +14,7 @@ import (
 	"github.com/tsai41/agent-conversation-handoff/internal/usage"
 )
 
-// TestBareInvocationDefaultsToMenu locks in that `ccs`/`ach` with no
+// TestBareInvocationDefaultsToMenu locks in that `ach` with no
 // subcommand behaves like the old bash launcher, which always ran
 // `ach menu --registry <default>` -- not a usage error.
 func TestBareInvocationDefaultsToMenu(t *testing.T) {

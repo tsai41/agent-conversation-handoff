@@ -1,6 +1,6 @@
 # 用量 snapshot 格式
 
-`ccs` 的「查看用量」只讀 snapshot 檔，不查任何 API、不碰認證資料、也不會為此開啟 session。誰來寫這些檔不重要，任何程式照下面的格式寫檔就能接上；這份文件就是公開的介面。內建的 `ccs usage record` 只是其中一個寫入端。
+`ach` 的「查看用量」只讀 snapshot 檔，不查任何 API、不碰認證資料、也不會為此開啟 session。誰來寫這些檔不重要，任何程式照下面的格式寫檔就能接上；這份文件就是公開的介面。內建的 `ach usage record` 只是其中一個寫入端。
 
 ## 目錄
 
@@ -13,7 +13,7 @@
 
 檔名由寫入端自己決定。讀取端會讀目錄裡所有 `*.json`，不看檔名；檔名不是寫入端之間協調的機制，同一個帳號有多份檔案是正常狀態，讀取端會依下面的選擇規則合併。
 
-`ccs usage record` 的命名方式是：把正規化後的 `config_dir` 取 SHA-256 十六進位（不含換行），加上 `.json`。正規化與帳號 home 相同：展開開頭的 `~`、轉成絕對路徑、去掉多餘的 `/` 與 `..`。
+`ach usage record` 的命名方式是：把正規化後的 `config_dir` 取 SHA-256 十六進位（不含換行），加上 `.json`。正規化與帳號 home 相同：展開開頭的 `~`、轉成絕對路徑、去掉多餘的 `/` 與 `..`。
 
 寫檔請先寫暫存檔再 rename，讀取端才不會讀到寫到一半的檔案；暫存檔別用 `.json` 結尾。
 
@@ -62,9 +62,9 @@
 
 新增欄位若舊版讀取端可以安全忽略，可以維持 `version` 為 `1`。會改變既有欄位意義、或舊版讀取端忽略後會誤讀的變更，必須提高 `version`；舊版讀到新版檔案視為沒有資料，不會誤讀。
 
-## 用 `ccs usage record` 寫入
+## 用 `ach usage record` 寫入
 
-`ccs usage record` 從 stdin 讀 Claude Code 傳給 status line 的 JSON，取 `rate_limits.five_hour` 與 `rate_limits.seven_day`（`resets_at` 是 epoch 秒，會轉成 RFC3339），為 `CLAUDE_CONFIG_DIR`（沒設就是 `~/.claude`）寫一份 snapshot。目錄的決定順序與選單相同，但不會讀取有問題的 registry 而觸發備份：registry 讀不了時，靜默改用預設路徑。
+`ach usage record` 從 stdin 讀 Claude Code 傳給 status line 的 JSON，取 `rate_limits.five_hour` 與 `rate_limits.seven_day`（`resets_at` 是 epoch 秒，會轉成 RFC3339），為 `CLAUDE_CONFIG_DIR`（沒設就是 `~/.claude`）寫一份 snapshot。目錄的決定順序與選單相同，但不會讀取有問題的 registry 而觸發備份：registry 讀不了時，靜默改用預設路徑。
 
 - 不會印任何東西到 stdout。
 - 沒有 `rate_limits`、兩個視窗都沒有可用的數字（缺少、`NaN` 或超出 0 到 100）、stdin 不是合法 JSON、或找不到家目錄時，什麼都不寫，結束碼仍是 0，原本的檔案不會被覆寫。只有真正的寫入失敗才會在 stderr 印錯誤並回傳非 0。

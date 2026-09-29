@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
-# Installs the ach/ccs binary from the latest GitHub Release. No git clone,
+# Installs the ach binary from the latest GitHub Release. No git clone,
 # no Go toolchain -- only fzf and curl. If gh is installed and authenticated
 # it is used for the download; otherwise curl fetches the public release.
 set -euo pipefail
 
 REPO="tsai41/agent-conversation-handoff"
 BIN_DIR="${BIN_DIR:-$HOME/bin}"
-COMMAND="${COMMAND:-ccs}"
+COMMAND="${COMMAND:-ach}"
 DEST="$BIN_DIR/$COMMAND"
 
 command -v claude >/dev/null 2>&1 || command -v codex >/dev/null 2>&1 || {
