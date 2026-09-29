@@ -289,16 +289,10 @@ func RegistryHandoff(registryPath, sourceID, targetID, sessionPath, project stri
 // handing a conversation off only reads the source account's files, and an
 // id typed at the next level can turn out to belong to any account anyway.
 func chooseSourceAccount(r registry.Registry, labels map[string]string) (string, error) {
-	accounts := append([]registry.Account(nil), r.Accounts...)
-	sort.SliceStable(accounts, func(i, j int) bool {
-		if accounts[i].Archived != accounts[j].Archived {
-			return !accounts[i].Archived
-		}
-		return accounts[i].ID < accounts[j].ID
-	})
-	candidates := make([]kv, 0, len(accounts))
-	for _, account := range accounts {
-		candidates = append(candidates, kv{account.ID, labels[account.ID]})
+	rows := registry.Rows(r)
+	candidates := make([]kv, 0, len(rows))
+	for _, row := range rows {
+		candidates = append(candidates, kv{row.ID, labels[row.ID]})
 	}
 	if len(candidates) == 0 {
 		return "", fmt.Errorf("no account is registered")

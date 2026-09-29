@@ -1579,3 +1579,28 @@ func TestUsageViewListsArchivedAccountLast(t *testing.T) {
 		t.Fatalf("expected the archived account to stay in the usage view, last, got: %s", stdout)
 	}
 }
+
+func TestHandoffSourcePickerOrdersByAccountNumber(t *testing.T) {
+	home := t.TempDir()
+	runWithFakePath(t, home)
+	calls := fakeFzf(t, home, key("claude-2"))
+	r := registry.Registry{Accounts: []registry.Account{
+		{ID: "claude-10", Provider: "claude", Number: 10},
+		{ID: "codex-1", Provider: "codex", Number: 1},
+		{ID: "claude-1", Provider: "claude", Number: 1, Archived: true},
+		{ID: "claude-2", Provider: "claude", Number: 2},
+	}}
+
+	if _, err := chooseSourceAccount(r, map[string]string{}); err != nil {
+		t.Fatal(err)
+	}
+
+	var got []string
+	for _, line := range strings.Split(strings.TrimSpace(callFile(t, calls, "rows-0")), "\n") {
+		got = append(got, strings.SplitN(line, "\t", 2)[0])
+	}
+	want := []string{"claude-2", "claude-10", "codex-1", "claude-1"}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Fatalf("source order = %v, want %v", got, want)
+	}
+}
