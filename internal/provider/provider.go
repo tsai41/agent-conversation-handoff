@@ -19,6 +19,20 @@ import (
 	"github.com/tsai41/agent-conversation-handoff/internal/registry"
 )
 
+// isDefaultClaudeHome reports whether home is the user's default ~/.claude,
+// which Claude reads without CLAUDE_CONFIG_DIR.
+func isDefaultClaudeHome(home string) (bool, error) {
+	userHome, err := os.UserHomeDir()
+	if err != nil {
+		return false, err
+	}
+	defaultHome, err := filepath.Abs(filepath.Join(userHome, ".claude"))
+	if err != nil {
+		return false, err
+	}
+	return home == defaultHome, nil
+}
+
 func environment(account registry.Account) ([]string, error) {
 	env := os.Environ()
 	home, err := filepath.Abs(account.Home)
@@ -26,15 +40,11 @@ func environment(account registry.Account) ([]string, error) {
 		return nil, err
 	}
 	if account.Provider == "claude" {
-		userHome, err := os.UserHomeDir()
+		isDefault, err := isDefaultClaudeHome(home)
 		if err != nil {
 			return nil, err
 		}
-		defaultHome, err := filepath.Abs(filepath.Join(userHome, ".claude"))
-		if err != nil {
-			return nil, err
-		}
-		if home == defaultHome {
+		if isDefault {
 			env = removeEnv(env, "CLAUDE_CONFIG_DIR")
 		} else {
 			env = setEnv(env, "CLAUDE_CONFIG_DIR", home)
@@ -76,16 +86,68 @@ func command(account registry.Account) string {
 
 // shellLaunchArgs invokes the provider command through the user's login zsh.
 // This preserves project-specific shell functions such as wrappers that add
-// repository context before calling the real provider CLI.
+// repository context before calling the real provider CLI. The selected
+// account environment is restored after shell startup files have run, since
+// they may change it.
 func shellLaunchArgs(providerCommand string, args ...string) []string {
-	return append([]string{"zsh", "-lic", `"$@"`, "ccs-launch", providerCommand}, args...)
+	const launchScript = `builtin cd -- "$ACH_LAUNCH_CWD" || builtin exit
+if [[ "$ACH_LAUNCH_PROVIDER" == "claude" ]]; then
+  if [[ "$ACH_LAUNCH_DEFAULT_CLAUDE_HOME" == "1" ]]; then
+    builtin unset CLAUDE_CONFIG_DIR
+  else
+    builtin export CLAUDE_CONFIG_DIR="$ACH_LAUNCH_HOME"
+  fi
+else
+  builtin export CODEX_HOME="$ACH_LAUNCH_HOME"
+fi
+builtin unset ACH_LAUNCH_CWD ACH_LAUNCH_PROVIDER ACH_LAUNCH_HOME ACH_LAUNCH_DEFAULT_CLAUDE_HOME
+"$@"`
+	return append([]string{"zsh", "-lic", launchScript, "ccs-launch", providerCommand}, args...)
 }
 
-func launchThroughShell(account registry.Account, args ...string) error {
+// launchDir returns dir when it is an existing directory, else the current
+// directory.
+func launchDir(dir string) (string, error) {
+	if dir != "" {
+		if info, err := os.Stat(dir); err == nil && info.IsDir() {
+			return filepath.Abs(dir)
+		}
+		fmt.Fprintf(os.Stderr, "recorded directory %s is gone; resuming from current directory\n", dir)
+	}
+	cwd, err := os.Getwd()
+	if err != nil {
+		return "", fmt.Errorf("current directory unavailable: %w", err)
+	}
+	return cwd, nil
+}
+
+func launchThroughShell(account registry.Account, dir string, args ...string) error {
 	env, err := environment(account)
 	if err != nil {
 		return err
 	}
+	cwd, err := launchDir(dir)
+	if err != nil {
+		return err
+	}
+	home, err := filepath.Abs(account.Home)
+	if err != nil {
+		return err
+	}
+	defaultClaudeHome := "0"
+	if account.Provider == "claude" {
+		isDefault, err := isDefaultClaudeHome(home)
+		if err != nil {
+			return err
+		}
+		if isDefault {
+			defaultClaudeHome = "1"
+		}
+	}
+	env = setEnv(env, "ACH_LAUNCH_CWD", cwd)
+	env = setEnv(env, "ACH_LAUNCH_PROVIDER", account.Provider)
+	env = setEnv(env, "ACH_LAUNCH_HOME", home)
+	env = setEnv(env, "ACH_LAUNCH_DEFAULT_CLAUDE_HOME", defaultClaudeHome)
 	providerCommand := command(account)
 	if _, err := exec.LookPath(providerCommand); err != nil {
 		return err
@@ -102,18 +164,20 @@ func launchThroughShell(account registry.Account, args ...string) error {
 // as its single argument (used to point a freshly-handed-off session at its
 // transcript).
 func Launch(account registry.Account, prompt string) error {
-	return launchThroughShell(account, prompt)
+	return launchThroughShell(account, "", prompt)
 }
 
 // LaunchSession replaces the current process with the provider CLI, no
 // arguments (used to just open the account's normal interactive session).
 func LaunchSession(account registry.Account) error {
-	return launchThroughShell(account)
+	return launchThroughShell(account, "")
 }
 
 // ResumeSession replaces the current process with the provider CLI resuming
-// the named session for account.
-func ResumeSession(account registry.Account, sessionID string) error {
+// the named session for account. Claude refuses to resume a conversation
+// outside the directory it was recorded in, so dir is where to launch; an empty
+// or missing dir falls back to the current directory.
+func ResumeSession(account registry.Account, sessionID, dir string) error {
 	if sessionID == "" {
 		return fmt.Errorf("session id is required")
 	}
@@ -121,7 +185,7 @@ func ResumeSession(account registry.Account, sessionID string) error {
 	if account.Provider == "codex" {
 		args = []string{"resume", sessionID}
 	}
-	return launchThroughShell(account, args...)
+	return launchThroughShell(account, dir, args...)
 }
 
 // launchBanner is the one line left in the terminal's scrollback above a

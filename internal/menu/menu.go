@@ -1161,11 +1161,16 @@ func launchAccount(registryPath string) error {
 	if err != nil {
 		return err
 	}
-	listing, err := sessionsForAccount(account, project)
-	if err != nil {
-		return err
+	// A project with no conversations of its own is not a dead end: a typed
+	// id still reaches every project.
+	listing, listErr := sessionsForAccount(account, project)
+	crumbs := breadcrumb(crumbChat, crumbResume)
+	if listErr != nil {
+		listing = session.CandidateList{}
+		crumbs = fmt.Sprintf("%s（無法掃描：%v；仍可輸入 ID 搜尋）", crumbs, listErr)
+	} else {
+		crumbs = sessionCountCrumb(crumbs, listing.Total, len(listing.Candidates))
 	}
-	crumbs := sessionCountCrumb(breadcrumb(crumbChat, crumbResume), listing.Total, len(listing.Candidates))
 	path, typed, err := pickSession(listing.Candidates, crumbs, "搜尋或輸入對話 ID: ")
 	if err != nil {
 		return err
@@ -1175,7 +1180,7 @@ func launchAccount(registryPath string) error {
 		if err != nil {
 			return err
 		}
-		return provider.ResumeSession(account, sessionID)
+		return provider.ResumeSession(account, sessionID, "")
 	}
 
 	matches, err := findSessionsByID(account, typed)
@@ -1186,7 +1191,7 @@ func launchAccount(registryPath string) error {
 		return fmt.Errorf("no conversation matches id: %s", typed)
 	}
 	if len(matches) == 1 {
-		return provider.ResumeSession(account, matches[0].SessionID)
+		return provider.ResumeSession(account, matches[0].SessionID, resumeDir(account, matches[0]))
 	}
 	resumeCandidates := make([]session.Candidate, len(matches))
 	for i, match := range matches {
@@ -1200,7 +1205,23 @@ func launchAccount(registryPath string) error {
 	if err != nil {
 		return err
 	}
-	return provider.ResumeSession(account, sessionID)
+	chosen := matches[0]
+	for _, match := range matches {
+		if match.Path == path {
+			chosen = match
+		}
+	}
+	return provider.ResumeSession(account, sessionID, resumeDir(account, chosen))
+}
+
+// resumeDir is where to launch a resume found by id. Only Claude is known to
+// refuse a conversation recorded in another directory; for Codex the current
+// directory is kept.
+func resumeDir(account registry.Account, match session.Match) string {
+	if account.Provider != "claude" {
+		return ""
+	}
+	return match.CWD
 }
 
 func findSessionsByID(account registry.Account, fragment string) ([]session.Match, error) {

@@ -110,6 +110,14 @@ func sessionText(entry map[string]any) string {
 	return strings.TrimSpace(strings.ReplaceAll(text, "\n", " "))
 }
 
+var nonAlphanumeric = regexp.MustCompile(`[^A-Za-z0-9]`)
+
+// ClaudeProjectID is the directory name Claude stores a project's sessions
+// under: every non-alphanumeric character of the absolute path becomes "-".
+func ClaudeProjectID(absProject string) string {
+	return nonAlphanumeric.ReplaceAllString(absProject, "-")
+}
+
 // ClaudeCandidates lists Claude sessions under sourceHome/projects/<project>
 // (already scoped to the project by directory), newest conversation first.
 // "Newest" is by the session's first recorded message timestamp, not file
@@ -121,7 +129,7 @@ func ClaudeCandidates(sourceHome, project string) ([]Candidate, error) {
 	if err != nil {
 		return nil, err
 	}
-	projectID := strings.NewReplacer("/", "-", "_", "-").Replace(absProject)
+	projectID := ClaudeProjectID(absProject)
 	sessionDir := filepath.Join(sourceHome, "projects", projectID)
 	info, err := os.Stat(sessionDir)
 	if err != nil || !info.IsDir() {
@@ -170,7 +178,7 @@ func ClaudeCandidateList(sourceHome, project string) (CandidateList, error) {
 	if err != nil {
 		return CandidateList{}, err
 	}
-	projectID := strings.NewReplacer("/", "-", "_", "-").Replace(absProject)
+	projectID := ClaudeProjectID(absProject)
 	matches, err := claudeSessionPaths(filepath.Join(sourceHome, "projects", projectID))
 	if err != nil {
 		return CandidateList{}, err

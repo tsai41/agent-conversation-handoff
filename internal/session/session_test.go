@@ -27,7 +27,7 @@ func TestClaudeCandidatesScopesToProjectDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	claudeHome := filepath.Join(dir, ".claude")
-	projectID := strings.NewReplacer("/", "-", "_", "-").Replace(mustAbs(t, project))
+	projectID := ClaudeProjectID(mustAbs(t, project))
 	sessionDir := filepath.Join(claudeHome, "projects", projectID)
 	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -62,7 +62,7 @@ func TestClaudeCandidatesUsesClaudeProjectPathEncoding(t *testing.T) {
 		t.Fatal(err)
 	}
 	claudeHome := filepath.Join(dir, ".claude")
-	projectID := strings.NewReplacer("/", "-", "_", "-").Replace(mustAbs(t, project))
+	projectID := ClaudeProjectID(mustAbs(t, project))
 	sessionDir := filepath.Join(claudeHome, "projects", projectID)
 	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -88,7 +88,7 @@ func TestClaudeCandidatesLimitsToFiveNewest(t *testing.T) {
 		t.Fatal(err)
 	}
 	claudeHome := filepath.Join(dir, ".claude")
-	projectID := strings.NewReplacer("/", "-", "_", "-").Replace(mustAbs(t, project))
+	projectID := ClaudeProjectID(mustAbs(t, project))
 	sessionDir := filepath.Join(claudeHome, "projects", projectID)
 	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -124,7 +124,7 @@ func TestClaudeCandidateListReportsTotalBeforeApplyingDisplayLimit(t *testing.T)
 		t.Fatal(err)
 	}
 	claudeHome := filepath.Join(dir, ".claude")
-	projectID := strings.NewReplacer("/", "-", "_", "-").Replace(mustAbs(t, project))
+	projectID := ClaudeProjectID(mustAbs(t, project))
 	sessionDir := filepath.Join(claudeHome, "projects", projectID)
 	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -538,4 +538,22 @@ func mustAbs(t *testing.T, path string) string {
 		t.Fatal(err)
 	}
 	return abs
+}
+
+func TestClaudeProjectIDReplacesEveryNonAlphanumericCharacter(t *testing.T) {
+	tests := []struct {
+		project string
+		want    string
+	}{
+		{"/Users/karen/.zsh.d", "-Users-karen--zsh-d"},
+		{"/Users/karen/go/src/agent-conversation-handoff", "-Users-karen-go-src-agent-conversation-handoff"},
+		{"/tmp/my_project v2", "-tmp-my-project-v2"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.project, func(t *testing.T) {
+			if got := ClaudeProjectID(tt.project); got != tt.want {
+				t.Fatalf("got %q, want %q", got, tt.want)
+			}
+		})
+	}
 }

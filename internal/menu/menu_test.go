@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/tsai41/agent-conversation-handoff/internal/registry"
+	"github.com/tsai41/agent-conversation-handoff/internal/session"
 )
 
 // captureStdout runs f with os.Stdout redirected to a pipe and returns
@@ -302,7 +303,7 @@ func TestRunResumesTheSelectedAccountSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	projectID := strings.NewReplacer("/", "-", "_", "-").Replace(project)
+	projectID := session.ClaudeProjectID(project)
 	sessionDir := filepath.Join(claudeHome, "projects", projectID)
 	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
 		t.Fatal(err)
@@ -329,6 +330,137 @@ func TestRunResumesTheSelectedAccountSession(t *testing.T) {
 	}
 	if got := callFile(t, calls, "rows-2"); !strings.Contains(got, "繼續既有對話") {
 		t.Fatalf("expected resume option, got %s", got)
+	}
+}
+
+func evalSymlinks(t *testing.T, path string) string {
+	t.Helper()
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resolved
+}
+
+func TestRunResumeByTypedIDLaunchesInTheSessionsRecordedDirectory(t *testing.T) {
+	tests := []struct {
+		name         string
+		recordedGone bool
+	}{
+		{name: "recorded directory exists"},
+		{name: "recorded directory is gone falls back to the current directory", recordedGone: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			home := t.TempDir()
+			runWithFakePath(t, home)
+
+			claudeHome := filepath.Join(home, ".claude")
+			codexHome := filepath.Join(home, ".codex")
+			here := filepath.Join(home, "here")
+			elsewhere := filepath.Join(home, "elsewhere")
+			for _, dir := range []string{here, elsewhere} {
+				if err := os.MkdirAll(dir, 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			recorded := elsewhere
+			if tt.recordedGone {
+				recorded = filepath.Join(home, "deleted")
+			}
+			sessionDir := filepath.Join(claudeHome, "projects", "-other-project")
+			if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			const sessionID = "edcda8ee-19af-45ac-ad5d-206136874fdd"
+			line := fmt.Sprintf(`{"type":"user","sessionId":%q,"cwd":%q,"timestamp":"2026-09-29T09:00:00Z","message":{"content":"continue this"}}`+"\n", sessionID, recorded)
+			if err := os.WriteFile(filepath.Join(sessionDir, sessionID+".jsonl"), []byte(line), 0o644); err != nil {
+				t.Fatal(err)
+			}
+
+			registryPath := filepath.Join(home, "accounts.json")
+			writeRegistry(t, registryPath, claudeHome, codexHome)
+			fakeFzf(t, home, key("chat"), key("claude-1"), key("resume"), typed("edcda8ee"))
+			pwdCapture := filepath.Join(home, "claude-pwd")
+			writeScript(t, filepath.Join(home, "bin", "claude"), fmt.Sprintf("#!/usr/bin/env bash\npwd -P > %q\n", pwdCapture))
+			writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
+
+			if _, stderr, err := runMenu(t, registryPath, here, ""); err != nil {
+				t.Fatalf("menu run failed: %v\nstderr: %s", err, stderr)
+			}
+
+			want := elsewhere
+			if tt.recordedGone {
+				want = here
+			}
+			want = evalSymlinks(t, want)
+			got, err := os.ReadFile(pwdCapture)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.TrimSpace(string(got)) != want {
+				t.Fatalf("expected claude to start in %s, got %q", want, got)
+			}
+		})
+	}
+}
+
+func TestRunResumeByTypedIDWithSeveralMatchesLaunchesInThePickedSessionsDirectory(t *testing.T) {
+	home := t.TempDir()
+	runWithFakePath(t, home)
+
+	claudeHome := filepath.Join(home, ".claude")
+	codexHome := filepath.Join(home, ".codex")
+	here := filepath.Join(home, "here")
+	firstDir := filepath.Join(home, "first")
+	secondDir := filepath.Join(home, "second")
+	for _, dir := range []string{here, firstDir, secondDir} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sessions := []struct {
+		id  string
+		cwd string
+	}{
+		{"edcda8ee-0000-45ac-ad5d-206136874fdd", firstDir},
+		{"edcda8ee-1111-45ac-ad5d-206136874fdd", secondDir},
+	}
+	var paths []string
+	for _, s := range sessions {
+		dir := filepath.Join(claudeHome, "projects", session.ClaudeProjectID(s.cwd))
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		line := fmt.Sprintf(`{"type":"user","sessionId":%q,"cwd":%q,"timestamp":"2026-09-29T09:00:00Z","message":{"content":"continue this"}}`+"\n", s.id, s.cwd)
+		path := filepath.Join(dir, s.id+".jsonl")
+		if err := os.WriteFile(path, []byte(line), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		paths = append(paths, path)
+	}
+
+	registryPath := filepath.Join(home, "accounts.json")
+	writeRegistry(t, registryPath, claudeHome, codexHome)
+	fakeFzf(t, home, key("chat"), key("claude-1"), key("resume"), typed("edcda8ee"), row(paths[1]))
+	argvCapture := filepath.Join(home, "claude-argv")
+	pwdCapture := filepath.Join(home, "claude-pwd")
+	writeScript(t, filepath.Join(home, "bin", "claude"), fmt.Sprintf("#!/usr/bin/env bash\npwd -P > %q\nprintf '%%s\\n' \"$@\" > %q\n", pwdCapture, argvCapture))
+	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
+
+	if _, stderr, err := runMenu(t, registryPath, here, ""); err != nil {
+		t.Fatalf("menu run failed: %v\nstderr: %s", err, stderr)
+	}
+
+	got, err := os.ReadFile(pwdCapture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := evalSymlinks(t, secondDir); strings.TrimSpace(string(got)) != want {
+		t.Fatalf("expected claude to start in %s, got %q", want, got)
+	}
+	if got, err := os.ReadFile(argvCapture); err != nil || string(got) != "--resume\n"+sessions[1].id+"\n" {
+		t.Fatalf("expected claude --resume %s, got %q, err %v", sessions[1].id, got, err)
 	}
 }
 
@@ -654,7 +786,7 @@ func TestHandoffPicksSourceThenConversationThenTarget(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sessionDir := filepath.Join(claudeHome, "projects", strings.NewReplacer("/", "-", "_", "-").Replace(resolvedProject))
+	sessionDir := filepath.Join(claudeHome, "projects", session.ClaudeProjectID(resolvedProject))
 	os.MkdirAll(sessionDir, 0o755)
 	os.MkdirAll(codexHome, 0o755)
 	sessionPath := filepath.Join(sessionDir, "source.jsonl")
@@ -756,7 +888,7 @@ func TestHandoffEscAtTargetPickerReturnsToSessionPicker(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	sessionDir := filepath.Join(claudeHome, "projects", strings.NewReplacer("/", "-", "_", "-").Replace(resolvedProject))
+	sessionDir := filepath.Join(claudeHome, "projects", session.ClaudeProjectID(resolvedProject))
 	os.MkdirAll(sessionDir, 0o755)
 	os.MkdirAll(codexHome, 0o755)
 	sessionPath := filepath.Join(sessionDir, "source.jsonl")
@@ -793,7 +925,7 @@ func TestQuickHandoffByIDFindsClaudeConversationAndLaunchesCodex(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	projectID := strings.NewReplacer("/", "-", "_", "-").Replace(resolvedProject)
+	projectID := session.ClaudeProjectID(resolvedProject)
 	claudeProjectDir := filepath.Join(claudeHome, "projects", projectID)
 	if err := os.MkdirAll(claudeProjectDir, 0o755); err != nil {
 		t.Fatal(err)
