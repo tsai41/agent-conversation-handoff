@@ -367,6 +367,22 @@ func TestSyncProjectTrustToAllOrdersAndExcludesNonTargets(t *testing.T) {
 	}
 }
 
+func TestSyncProjectTrustToAllListsArchivedTargetsLast(t *testing.T) {
+	source := claudeAccountHome(t, "claude-1", 1)
+	writeClaudeJSON(t, source, `{"projects": {"/repo/a": {"hasTrustDialogAccepted": true}}}`)
+	second := claudeAccountHome(t, "claude-2", 2)
+	second.Archived = true
+	third := claudeAccountHome(t, "claude-3", 3)
+
+	results, err := SyncProjectTrustToAll(Registry{Accounts: []Account{source, second, third}}, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 2 || results[0].Target.ID != "claude-3" || results[1].Target.ID != "claude-2" {
+		t.Fatalf("expected claude-3 then the archived claude-2, got %+v", results)
+	}
+}
+
 func TestSyncProjectTrustToAllRefusesNonClaudeSource(t *testing.T) {
 	source := account("codex-1", "codex", t.TempDir(), 1)
 	target := claudeAccountHome(t, "claude-1", 1)

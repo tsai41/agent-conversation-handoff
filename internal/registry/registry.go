@@ -22,6 +22,9 @@ type Account struct {
 	Number   int    `json:"number"`
 	Home     string `json:"home"`
 	Alias    string `json:"alias"`
+	// Archived only moves the account to the end of every list and adds a
+	// label suffix; an archived account stays fully usable.
+	Archived bool `json:"archived,omitempty"`
 }
 
 type Registry struct {
@@ -323,6 +326,56 @@ func RenameAccount(path string, accountID string, alias string) error {
 	})
 }
 
+// SetArchived flips the account's archived flag in the registry file only.
+func SetArchived(path string, accountID string, archived bool) error {
+	return WithLock(path, func() error {
+		r, err := Load(path)
+		if err != nil {
+			return err
+		}
+		for i := range r.Accounts {
+			if r.Accounts[i].ID == accountID {
+				r.Accounts[i].Archived = archived
+				return Save(path, r)
+			}
+		}
+		return fmt.Errorf("account is not registered: %s", accountID)
+	})
+}
+
+// ToggleArchived flips the account's archived flag and returns the new state.
+// The read and the flip share one lock so two toggles cannot both act on the
+// same old state.
+func ToggleArchived(path string, accountID string) (bool, error) {
+	var archived bool
+	err := WithLock(path, func() error {
+		r, err := Load(path)
+		if err != nil {
+			return err
+		}
+		for i := range r.Accounts {
+			if r.Accounts[i].ID == accountID {
+				archived = !r.Accounts[i].Archived
+				r.Accounts[i].Archived = archived
+				return Save(path, r)
+			}
+		}
+		return fmt.Errorf("account is not registered: %s", accountID)
+	})
+	return archived, err
+}
+
+// DisplayOrder returns a copy of the accounts in the order shown to the
+// user: registry order kept, archived accounts moved to the end.
+func DisplayOrder(r Registry) []Account {
+	ordered := make([]Account, len(r.Accounts))
+	copy(ordered, r.Accounts)
+	sort.SliceStable(ordered, func(i, j int) bool {
+		return !ordered[i].Archived && ordered[j].Archived
+	})
+	return ordered
+}
+
 // SetUsageDir persists usageDir as the registry's usage-view directory,
 // expanding a leading ~ the same way an account home is resolved, and
 // returns the value actually stored. An empty usageDir clears the setting.
@@ -461,8 +514,8 @@ func SuggestAccountHome(path string, provider string) (string, error) {
 }
 
 // Rows returns (account id, display label) pairs sorted by provider then
-// number, appending the account number and alias to the label when a
-// provider has more than one registered account.
+// number with archived accounts last, appending the account number and alias
+// to the label when a provider has more than one registered account.
 func Rows(r Registry) []struct{ ID, Label string } {
 	counts := map[string]int{}
 	for _, account := range r.Accounts {
@@ -471,6 +524,9 @@ func Rows(r Registry) []struct{ ID, Label string } {
 	sorted := make([]Account, len(r.Accounts))
 	copy(sorted, r.Accounts)
 	sort.Slice(sorted, func(i, j int) bool {
+		if sorted[i].Archived != sorted[j].Archived {
+			return !sorted[i].Archived
+		}
 		if sorted[i].Provider != sorted[j].Provider {
 			return sorted[i].Provider < sorted[j].Provider
 		}
@@ -484,6 +540,9 @@ func Rows(r Registry) []struct{ ID, Label string } {
 			if account.Alias != "" {
 				name += " · " + account.Alias
 			}
+		}
+		if account.Archived {
+			name += "（已封存）"
 		}
 		rows = append(rows, struct{ ID, Label string }{account.ID, name})
 	}

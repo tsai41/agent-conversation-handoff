@@ -1416,3 +1416,166 @@ func TestManageAccountsTrustCancelWritesNothing(t *testing.T) {
 		}
 	}
 }
+
+func writeArchivedRegistry(t *testing.T, path, claudeHome, codexHome string) {
+	t.Helper()
+	content := fmt.Sprintf(`{
+		"version": 1,
+		"next_number": {"claude": 2, "codex": 2},
+		"accounts": [
+			{"id": "claude-1", "provider": "claude", "number": 1, "home": %q, "alias": "", "archived": true},
+			{"id": "codex-1", "provider": "codex", "number": 1, "home": %q, "alias": ""}
+		]
+	}`, claudeHome, codexHome)
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// An archived account stays selectable in the chat picker; it is only listed
+// after the others and labelled.
+func TestChatPickerListsArchivedAccountLastWithSuffixAndStaysSelectable(t *testing.T) {
+	home := t.TempDir()
+	runWithFakePath(t, home)
+	claudeHome := filepath.Join(home, ".claude")
+	codexHome := filepath.Join(home, ".codex")
+	os.MkdirAll(claudeHome, 0o755)
+	os.MkdirAll(codexHome, 0o755)
+	registryPath := filepath.Join(home, "accounts.json")
+	writeArchivedRegistry(t, registryPath, claudeHome, codexHome)
+
+	calls := fakeFzf(t, home, key("chat"), key("claude-1"), key("new"))
+	launched := filepath.Join(home, "claude-launched")
+	writeScript(t, filepath.Join(home, "bin", "claude"), fmt.Sprintf("#!/usr/bin/env bash\ntouch %q\n", launched))
+	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
+
+	if _, stderr, err := runMenu(t, registryPath, home, ""); err != nil {
+		t.Fatalf("menu run failed: %v\nstderr: %s", err, stderr)
+	}
+
+	lines := strings.Split(strings.TrimSpace(callFile(t, calls, "rows-1")), "\n")
+	if len(lines) != 2 || !strings.Contains(lines[0], "1. Codex") || !strings.Contains(lines[1], "2. Claude（已封存）") {
+		t.Fatalf("expected Codex first and the archived Claude last with its suffix, got: %v", lines)
+	}
+	if _, err := os.Stat(launched); err != nil {
+		t.Fatalf("expected the archived account to launch, got: %v", err)
+	}
+}
+
+func TestHandoffTargetPickerListsArchivedAccountLast(t *testing.T) {
+	home := t.TempDir()
+	runWithFakePath(t, home)
+	project := filepath.Join(home, "project")
+	os.MkdirAll(project, 0o755)
+	claude1Home := filepath.Join(home, ".claude")
+	claude2Home := filepath.Join(home, ".claude-2")
+	codexHome := filepath.Join(home, ".codex")
+	resolvedProject, err := filepath.EvalSymlinks(project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sessionDir := filepath.Join(claude1Home, "projects", session.ClaudeProjectID(resolvedProject))
+	os.MkdirAll(sessionDir, 0o755)
+	os.MkdirAll(claude2Home, 0o755)
+	os.MkdirAll(codexHome, 0o755)
+	sessionPath := filepath.Join(sessionDir, "source.jsonl")
+	os.WriteFile(sessionPath, []byte(`{"type":"user","sessionId":"aaaaaaaa-1111-4222-8333-44444444abcd","message":{"content":"continue this"}}`+"\n"), 0o644)
+
+	registryPath := filepath.Join(home, "accounts.json")
+	writeRegistryTwoClaudeAccounts(t, registryPath, claude1Home, claude2Home, codexHome)
+	r, err := registry.Load(registryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.Accounts[1].Archived = true
+	if err := registry.Save(registryPath, r); err != nil {
+		t.Fatal(err)
+	}
+
+	calls := fakeFzf(t, home, key("handoff"), key("claude-1"), row(sessionPath), key("codex-1"))
+	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nif [ \"$1 $2\" = 'login status' ]; then exit 0; fi\n")
+	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
+
+	if _, stderr, err := runMenu(t, registryPath, project, ""); err != nil {
+		t.Fatalf("menu run failed: %v\nstderr: %s", err, stderr)
+	}
+
+	lines := strings.Split(strings.TrimSpace(callFile(t, calls, "rows-3")), "\n")
+	if len(lines) != 2 || !strings.Contains(lines[0], "Codex") || !strings.Contains(lines[1], "Claude · 2（已封存）") {
+		t.Fatalf("expected Codex first and the archived Claude last in the target picker, got: %v", lines)
+	}
+}
+
+func TestManageAccountsArchiveTogglesAndRoundTrips(t *testing.T) {
+	home := t.TempDir()
+	runWithFakePath(t, home)
+	claudeHome := filepath.Join(home, ".claude")
+	codexHome := filepath.Join(home, ".codex")
+	os.MkdirAll(claudeHome, 0o755)
+	os.MkdirAll(codexHome, 0o755)
+	registryPath := filepath.Join(home, "accounts.json")
+	writeRegistry(t, registryPath, claudeHome, codexHome)
+
+	calls := fakeFzf(t, home,
+		key("accounts"), key("archive"), key("claude-1"),
+		key("archive"), key("claude-1"),
+		cancel(), key("chat"), key("claude-1"), key("new"))
+	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
+	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
+
+	stdout, stderr, err := runMenu(t, registryPath, home, "")
+	if err != nil {
+		t.Fatalf("menu run failed: %v\nstderr: %s", err, stderr)
+	}
+
+	if !strings.Contains(callFile(t, calls, "rows-1"), "封存／解除封存帳號") {
+		t.Fatalf("expected 帳號設定 to offer the archive action, got: %s", callFile(t, calls, "rows-1"))
+	}
+	if !strings.Contains(stdout, "已封存「Claude」，資料與對話紀錄都沒動。") {
+		t.Fatalf("expected the archive confirmation, got: %s", stdout)
+	}
+	// The second pick happens with claude-1 archived, so it is listed last.
+	second := strings.Split(strings.TrimSpace(callFile(t, calls, "rows-4")), "\n")
+	if len(second) != 2 || !strings.Contains(second[0], "Codex") || !strings.Contains(second[1], "Claude（已封存）") {
+		t.Fatalf("expected the picker to list the archived account last, got: %v", second)
+	}
+	if !strings.Contains(stdout, "已解除封存「Claude」。") {
+		t.Fatalf("expected the unarchive confirmation, got: %s", stdout)
+	}
+
+	updated, err := registry.Load(registryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if updated.Accounts[0].Archived {
+		t.Fatalf("expected the second toggle to unarchive the account: %+v", updated.Accounts)
+	}
+	if _, err := os.Stat(claudeHome); err != nil {
+		t.Fatalf("archiving must not touch the account directory: %v", err)
+	}
+}
+
+func TestUsageViewListsArchivedAccountLast(t *testing.T) {
+	home := t.TempDir()
+	runWithFakePath(t, home)
+	claudeHome := filepath.Join(home, ".claude")
+	codexHome := filepath.Join(home, ".codex")
+	os.MkdirAll(claudeHome, 0o755)
+	os.MkdirAll(codexHome, 0o755)
+	registryPath := filepath.Join(home, "accounts.json")
+	writeArchivedRegistry(t, registryPath, claudeHome, codexHome)
+
+	fakeFzf(t, home, key("usage"), key("chat"), key("codex-1"), key("new"))
+	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
+	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
+
+	stdout, stderr, err := runMenuWithUsageDir(t, registryPath, filepath.Join(home, "usage"), home, "\n")
+	if err != nil {
+		t.Fatalf("menu run failed: %v\nstderr: %s", err, stderr)
+	}
+	codexAt := strings.Index(stdout, "Codex")
+	claudeAt := strings.Index(stdout, "Claude（已封存）")
+	if codexAt < 0 || claudeAt < 0 || codexAt > claudeAt {
+		t.Fatalf("expected the archived account to stay in the usage view, last, got: %s", stdout)
+	}
+}

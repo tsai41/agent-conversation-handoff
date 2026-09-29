@@ -156,11 +156,23 @@ ach
 - 修改 alias：alias 選填，只影響選單顯示。
 - 登入／重新登入：以選定帳號的 home 執行官方登入指令。
 - 共用設定到所有帳號：見下面「共用設定」一節。
+- 封存／解除封存帳號：見下面「封存帳號」一節。
 - 從 ach 移除帳號：只取消 registry 登記，絕不刪除帳號目錄、session 或認證資料。
 - 匯入既有帳號目錄：只匯入你明確選擇的候選。
 - 設定用量資料目錄：見 [docs/usage-snapshot.md](docs/usage-snapshot.md)，設定後存在 registry 裡，不用每次都帶 `--usage-dir`。留空即清除設定，改用預設路徑。
 - 同步專案信任到其他帳號：見 [docs/shared-settings.md](docs/shared-settings.md)。
 
+
+### 封存帳號
+
+不再常用、但想留著對話紀錄的帳號可以封存：它在所有清單裡（選帳號、接手來源與目標、查看用量）排到最後，標籤加上「（已封存）」。封存只改 `accounts.json` 裡的一個欄位，帳號目錄、認證與對話紀錄都不動，帳號編號也不變。封存後照樣能選、能繼續對話、能用 ID 搜尋，也能當接手的目標。`ach accounts list` 同樣把封存帳號列在最後並加上這個標籤。
+
+到 `帳號設定` > `封存／解除封存帳號`，選帳號即切換狀態；要還原就對同一個帳號再做一次。命令列：
+
+```sh
+ach accounts archive --registry <路徑> --id claude-2
+ach accounts unarchive --registry <路徑> --id claude-2
+```
 
 ### 共用設定
 

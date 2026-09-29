@@ -199,6 +199,13 @@ func main() {
 			if err := registry.RenameAccount(*registryPath, *id, *alias); err != nil {
 				fail(err)
 			}
+		case "archive", "unarchive":
+			if *id == "" {
+				fail(fmt.Errorf("--id is required"))
+			}
+			if err := registry.SetArchived(*registryPath, *id, accountsCommand == "archive"); err != nil {
+				fail(err)
+			}
 		case "auth-status":
 			if *id == "" {
 				fail(fmt.Errorf("--id is required"))

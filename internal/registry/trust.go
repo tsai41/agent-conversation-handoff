@@ -174,7 +174,7 @@ func SyncProjectTrust(source, target Account) (TrustSync, error) {
 }
 
 // SyncProjectTrustToAll runs SyncProjectTrust from source into every other
-// registered claude account, in Number order. A target that fails is
+// registered claude account, in Number order, archived accounts last. A target that fails is
 // recorded on its own TrustSync.Err and does not stop the others, so the
 // returned slice always covers every target; the error is non-nil only
 // when source is not a claude account.
@@ -189,7 +189,12 @@ func SyncProjectTrustToAll(r Registry, source Account) ([]TrustSync, error) {
 		}
 		targets = append(targets, candidate)
 	}
-	sort.Slice(targets, func(i, j int) bool { return targets[i].Number < targets[j].Number })
+	sort.Slice(targets, func(i, j int) bool {
+		if targets[i].Archived != targets[j].Archived {
+			return !targets[i].Archived
+		}
+		return targets[i].Number < targets[j].Number
+	})
 
 	results := make([]TrustSync, 0, len(targets))
 	for _, target := range targets {

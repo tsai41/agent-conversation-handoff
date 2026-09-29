@@ -289,14 +289,16 @@ func RegistryHandoff(registryPath, sourceID, targetID, sessionPath, project stri
 // handing a conversation off only reads the source account's files, and an
 // id typed at the next level can turn out to belong to any account anyway.
 func chooseSourceAccount(r registry.Registry, labels map[string]string) (string, error) {
-	ids := make([]string, 0, len(r.Accounts))
-	for _, account := range r.Accounts {
-		ids = append(ids, account.ID)
-	}
-	sort.Strings(ids)
-	candidates := make([]kv, 0, len(ids))
-	for _, id := range ids {
-		candidates = append(candidates, kv{id, labels[id]})
+	accounts := append([]registry.Account(nil), r.Accounts...)
+	sort.SliceStable(accounts, func(i, j int) bool {
+		if accounts[i].Archived != accounts[j].Archived {
+			return !accounts[i].Archived
+		}
+		return accounts[i].ID < accounts[j].ID
+	})
+	candidates := make([]kv, 0, len(accounts))
+	for _, account := range accounts {
+		candidates = append(candidates, kv{account.ID, labels[account.ID]})
 	}
 	if len(candidates) == 0 {
 		return "", fmt.Errorf("no account is registered")
@@ -414,7 +416,7 @@ func QuickHandoff(registryPath, fragment, project string) error {
 		match     session.Match
 	}
 	var hits []hit
-	for _, account := range r.Accounts {
+	for _, account := range registry.DisplayOrder(r) {
 		if account.Provider != "claude" {
 			continue
 		}
@@ -453,7 +455,7 @@ func QuickHandoff(registryPath, fragment, project string) error {
 
 func chooseCodexTarget(r registry.Registry, labels map[string]string) (string, error) {
 	var candidates []kv
-	for _, account := range r.Accounts {
+	for _, account := range registry.DisplayOrder(r) {
 		if account.Provider == "codex" && cliInstalled(account) {
 			candidates = append(candidates, kv{account.ID, labels[account.ID]})
 		}
@@ -481,7 +483,7 @@ func manualIDHandoff(registryPath string, r registry.Registry, labels map[string
 	}
 	var hits []hit
 	var lookupErrors []string
-	for _, account := range r.Accounts {
+	for _, account := range registry.DisplayOrder(r) {
 		var matches []session.Match
 		var err error
 		if account.Provider == "claude" {
@@ -557,7 +559,7 @@ func resolvePath(path string) string {
 
 func chooseTargetExcluding(r registry.Registry, labels map[string]string, sourceID, crumbs string) (string, error) {
 	var candidates []kv
-	for _, account := range r.Accounts {
+	for _, account := range registry.DisplayOrder(r) {
 		if account.ID == sourceID || !cliInstalled(account) {
 			continue
 		}
@@ -612,7 +614,7 @@ func bootstrapRegistry(registryPath string) error {
 func chooseRegisteredAccount(r registry.Registry, crumbs, prompt string) (string, error) {
 	labels := accountLabels(r)
 	candidates := make([]kv, 0, len(r.Accounts))
-	for _, account := range r.Accounts {
+	for _, account := range registry.DisplayOrder(r) {
 		candidates = append(candidates, kv{account.ID, labels[account.ID]})
 	}
 	return pickKey(candidates, crumbs, prompt, true)
@@ -683,7 +685,7 @@ func shareAllAccountSettings(r registry.Registry) {
 	// against, distinguishing "every entry already shared" from "the source
 	// had nothing to share in the first place".
 	examined := false
-	for _, account := range r.Accounts {
+	for _, account := range registry.DisplayOrder(r) {
 		source, found := registry.PrimaryAccount(r, account.Provider)
 		if !found || source.ID == account.ID {
 			continue
@@ -737,6 +739,7 @@ func manageAccounts(registryPath string) error {
 			{"rename", "修改 alias"},
 			{"login", "登入／重新登入"},
 			{"share", "共用設定到所有帳號"},
+			{"archive", "封存／解除封存帳號"},
 			{"remove", "從 ach 移除帳號"},
 			{"import", "匯入既有帳號目錄"},
 			{"usage-dir", "設定用量資料目錄"},
@@ -894,6 +897,31 @@ func manageAccounts(registryPath string) error {
 			if _, err := registry.AddAccount(registryPath, parts[0], parts[1], alias); err != nil {
 				return err
 			}
+		case "archive":
+			r, err := registry.Load(registryPath)
+			if err != nil {
+				return err
+			}
+			accountID, err := chooseRegisteredAccount(r, actionCrumbs, "選擇要封存或解除封存的帳號: ")
+			if err != nil {
+				if errors.Is(err, errCancelled) {
+					continue
+				}
+				return err
+			}
+			archived, err := registry.ToggleArchived(registryPath, accountID)
+			if err != nil {
+				return err
+			}
+			if archived {
+				fmt.Printf("已封存「%s」，資料與對話紀錄都沒動。\n", accountLabels(r)[accountID])
+				continue
+			}
+			updated, err := registry.Load(registryPath)
+			if err != nil {
+				return err
+			}
+			fmt.Printf("已解除封存「%s」。\n", accountLabels(updated)[accountID])
 		case "remove":
 			r, err := registry.Load(registryPath)
 			if err != nil {
@@ -1021,7 +1049,7 @@ func launchAccount(registryPath string) error {
 	}
 	labels := accountLabels(r)
 	var candidates []kv
-	for _, account := range r.Accounts {
+	for _, account := range registry.DisplayOrder(r) {
 		if cliInstalled(account) {
 			candidates = append(candidates, kv{account.ID, labels[account.ID]})
 		}

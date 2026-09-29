@@ -185,3 +185,46 @@ func TestUsageRecordLeavesACorruptRegistryAlone(t *testing.T) {
 		})
 	}
 }
+
+func TestAccountsArchiveAndUnarchiveSubcommands(t *testing.T) {
+	binary := filepath.Join(t.TempDir(), "ach")
+	if out, err := exec.Command("go", "build", "-o", binary, ".").CombinedOutput(); err != nil {
+		t.Fatalf("build failed: %v\n%s", err, out)
+	}
+	dir := t.TempDir()
+	registryPath := filepath.Join(dir, "accounts.json")
+	accountHome := filepath.Join(dir, ".claude")
+	if _, err := registry.AddAccount(registryPath, "claude", accountHome, ""); err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name         string
+		args         []string
+		wantArchived bool
+		wantFail     bool
+	}{
+		{"archive", []string{"accounts", "archive", "--registry", registryPath, "--id", "claude-1"}, true, false},
+		{"unarchive", []string{"accounts", "unarchive", "--registry", registryPath, "--id", "claude-1"}, false, false},
+		{"missing id", []string{"accounts", "archive", "--registry", registryPath}, false, true},
+		{"unknown id", []string{"accounts", "archive", "--registry", registryPath, "--id", "claude-9"}, false, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			out, err := exec.Command(binary, tt.args...).CombinedOutput()
+			if tt.wantFail != (err != nil) {
+				t.Fatalf("wantFail=%v, got err=%v\n%s", tt.wantFail, err, out)
+			}
+			r, loadErr := registry.Load(registryPath)
+			if loadErr != nil {
+				t.Fatal(loadErr)
+			}
+			if r.Accounts[0].Archived != tt.wantArchived {
+				t.Fatalf("expected archived=%v, got %+v", tt.wantArchived, r.Accounts[0])
+			}
+			if _, statErr := os.Stat(accountHome); statErr != nil {
+				t.Fatalf("the account directory must be untouched: %v", statErr)
+			}
+		})
+	}
+}
