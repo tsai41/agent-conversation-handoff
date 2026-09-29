@@ -105,6 +105,28 @@ func LaunchSession(account registry.Account) error {
 	return syscall.Exec(binary, []string{command(account)}, env)
 }
 
+// ResumeSession replaces the current process with the provider CLI resuming
+// the named session for account.
+func ResumeSession(account registry.Account, sessionID string) error {
+	env, err := environment(account)
+	if err != nil {
+		return err
+	}
+	binary, err := exec.LookPath(command(account))
+	if err != nil {
+		return err
+	}
+	if sessionID == "" {
+		return fmt.Errorf("session id is required")
+	}
+	args := []string{command(account), "--resume", sessionID}
+	if account.Provider == "codex" {
+		args = []string{command(account), "resume", sessionID}
+	}
+	fmt.Println(launchBanner(account))
+	return syscall.Exec(binary, args, env)
+}
+
 // launchBanner is the one line left in the terminal's scrollback above a
 // session, so that after the CLI exits it is still visible which account
 // the session ran as. The home is included because number and alias can

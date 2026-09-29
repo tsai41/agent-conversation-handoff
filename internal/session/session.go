@@ -38,6 +38,29 @@ type Match struct {
 	StartTime time.Time
 }
 
+// ID reads the provider session identifier recorded in path.
+func ID(path, provider string) (string, error) {
+	if provider == "claude" {
+		id, _, _, err := readClaudeSession(path)
+		if err != nil {
+			return "", err
+		}
+		if id == "" || id == "unknown UUID" {
+			return "", fmt.Errorf("no session id recorded in %s", path)
+		}
+		return id, nil
+	}
+
+	id, _, _, found, err := scanCodexSession(path, "")
+	if err != nil {
+		return "", err
+	}
+	if !found || id == "" || id == "unknown UUID" {
+		return "", fmt.Errorf("no session id recorded in %s", path)
+	}
+	return id, nil
+}
+
 const maxCandidates = 5
 
 // minIDFragment keeps a one- or two-character entry from matching most of

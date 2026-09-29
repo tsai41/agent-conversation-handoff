@@ -33,6 +33,7 @@ var errCancelled = errors.New("selection cancelled")
 const (
 	rootCrumb       = "主選單"
 	crumbChat       = "使用帳號對話"
+	crumbResume     = "繼續既有對話"
 	crumbHandoff    = "接手對話"
 	crumbSource     = "選擇來源 Agent"
 	crumbSession    = "選擇來源對話"
@@ -747,7 +748,6 @@ func manageAccounts(registryPath, usageDirFlag string, usageDirFlagExplicit bool
 			{"usage-dir", "設定用量資料目錄"},
 			{"statusline", crumbStatusline},
 			{"trust", "同步專案信任到其他帳號"},
-			{"back", "返回主選單"},
 		}
 		action, err := pickKey(actions, crumbs, "選擇動作: ", true)
 		if err != nil {
@@ -758,8 +758,6 @@ func manageAccounts(registryPath, usageDirFlag string, usageDirFlagExplicit bool
 		}
 		actionCrumbs := breadcrumb(crumbAccounts, labelOf(actions, action))
 		switch action {
-		case "back":
-			return nil
 		case "add":
 			var providers []kv
 			for _, entry := range []struct{ id, cmd string }{{"claude", "claude"}, {"codex", "codex"}} {
@@ -1148,7 +1146,68 @@ func launchAccount(registryPath string) error {
 	if err != nil {
 		return err
 	}
-	return provider.LaunchSession(account)
+	action, err := pickKey([]kv{
+		{"new", "新開對話"},
+		{"resume", crumbResume},
+	}, breadcrumb(crumbChat), "選擇對話方式: ", true)
+	if err != nil {
+		return err
+	}
+	if action == "new" {
+		return provider.LaunchSession(account)
+	}
+
+	project, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	listing, err := sessionsForAccount(account, project)
+	if err != nil {
+		return err
+	}
+	crumbs := sessionCountCrumb(breadcrumb(crumbChat, crumbResume), listing.Total, len(listing.Candidates))
+	path, typed, err := pickSession(listing.Candidates, crumbs, "搜尋或輸入對話 ID: ")
+	if err != nil {
+		return err
+	}
+	if path != "" {
+		sessionID, err := session.ID(path, account.Provider)
+		if err != nil {
+			return err
+		}
+		return provider.ResumeSession(account, sessionID)
+	}
+
+	matches, err := findSessionsByID(account, typed)
+	if err != nil {
+		return err
+	}
+	if len(matches) == 0 {
+		return fmt.Errorf("no conversation matches id: %s", typed)
+	}
+	if len(matches) == 1 {
+		return provider.ResumeSession(account, matches[0].SessionID)
+	}
+	resumeCandidates := make([]session.Candidate, len(matches))
+	for i, match := range matches {
+		resumeCandidates[i] = match.Candidate
+	}
+	path, err = pickSessionRow(resumeCandidates, breadcrumb(crumbChat, crumbResume), "多筆符合，選擇要繼續的對話: ")
+	if err != nil {
+		return err
+	}
+	sessionID, err := session.ID(path, account.Provider)
+	if err != nil {
+		return err
+	}
+	return provider.ResumeSession(account, sessionID)
+}
+
+func findSessionsByID(account registry.Account, fragment string) ([]session.Match, error) {
+	if account.Provider == "claude" {
+		return session.FindClaudeByID(account.Home, fragment)
+	}
+	return session.FindCodexByID(account.Home, fragment)
 }
 
 // showUsage prints every registered account's Claude quota from whatever
@@ -1221,7 +1280,6 @@ func Run(registryPath, usageDirFlag string, usageDirFlagExplicit bool) error {
 			{"handoff", crumbHandoff},
 			{"accounts", crumbAccounts},
 			{"usage", crumbUsage},
-			{"quit", "離開"},
 		}, breadcrumb(), "選擇功能: ", true)
 		if err != nil {
 			if errors.Is(err, errCancelled) {
@@ -1230,8 +1288,6 @@ func Run(registryPath, usageDirFlag string, usageDirFlagExplicit bool) error {
 			return err
 		}
 		switch action {
-		case "quit":
-			return nil
 		case "chat":
 			if err := launchAccount(registryPath); err != nil {
 				if errors.Is(err, errCancelled) {

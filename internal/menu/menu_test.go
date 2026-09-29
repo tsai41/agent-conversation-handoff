@@ -222,7 +222,7 @@ func TestRunPicksAFunctionBeforeAnAccountThenPassesRealStdinToTheLaunchedCLI(t *
 	registryPath := filepath.Join(home, "accounts.json")
 	writeRegistry(t, registryPath, claudeHome, codexHome)
 
-	calls := fakeFzf(t, home, key("chat"), key("claude-1"))
+	calls := fakeFzf(t, home, key("chat"), key("claude-1"), key("new"))
 	stdinCapture := filepath.Join(home, "stdin-seen")
 	writeScript(t, filepath.Join(home, "bin", "claude"), fmt.Sprintf("#!/usr/bin/env bash\nhead -n1 > %q\n", stdinCapture))
 	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
@@ -241,6 +241,9 @@ func TestRunPicksAFunctionBeforeAnAccountThenPassesRealStdinToTheLaunchedCLI(t *
 	}
 	if strings.Contains(functions, "Claude") || strings.Contains(functions, "Codex") {
 		t.Fatalf("accounts leaked into the function level: %s", functions)
+	}
+	if strings.Contains(functions, "離開") {
+		t.Fatalf("expected ESC to be the only root-menu exit, got: %s", functions)
 	}
 	argv := callFile(t, calls, "argv-0")
 	if !strings.Contains(argv, "--bind=1:pos(1)+accept,2:pos(2)+accept,3:pos(3)+accept") {
@@ -274,6 +277,58 @@ func TestRunPicksAFunctionBeforeAnAccountThenPassesRealStdinToTheLaunchedCLI(t *
 	}
 	if string(seen) != "real-stdin-marker\n" {
 		t.Fatalf("expected claude to see real stdin, got %q", seen)
+	}
+}
+
+func TestRunResumesTheSelectedAccountSession(t *testing.T) {
+	home := t.TempDir()
+	runWithFakePath(t, home)
+
+	claudeHome := filepath.Join(home, ".claude")
+	codexHome := filepath.Join(home, ".codex")
+	project := filepath.Join(home, "project")
+	if err := os.MkdirAll(project, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(project); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chdir(previous) })
+	project, err = os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	projectID := strings.NewReplacer("/", "-", "_", "-").Replace(project)
+	sessionDir := filepath.Join(claudeHome, "projects", projectID)
+	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	sessionPath := filepath.Join(sessionDir, "resume.jsonl")
+	const sessionID = "edcda8ee-19af-45ac-ad5d-206136874fdd"
+	if err := os.WriteFile(sessionPath, []byte(fmt.Sprintf(`{"type":"user","sessionId":%q,"timestamp":"2026-09-29T09:00:00Z","message":{"content":"continue this"}}`+"\n", sessionID)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	registryPath := filepath.Join(home, "accounts.json")
+	writeRegistry(t, registryPath, claudeHome, codexHome)
+	calls := fakeFzf(t, home, key("chat"), key("claude-1"), key("resume"), row(sessionPath))
+	argvCapture := filepath.Join(home, "claude-argv")
+	writeScript(t, filepath.Join(home, "bin", "claude"), fmt.Sprintf("#!/usr/bin/env bash\nprintf '%%s\\n' \"$@\" > %q\n", argvCapture))
+	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
+
+	_, stderr, err := runMenu(t, registryPath, project, "")
+	if err != nil {
+		t.Fatalf("menu run failed: %v\nstderr: %s", err, stderr)
+	}
+	if got, err := os.ReadFile(argvCapture); err != nil || string(got) != "--resume\n"+sessionID+"\n" {
+		t.Fatalf("expected claude --resume %s, got %q, err %v", sessionID, got, err)
+	}
+	if got := callFile(t, calls, "rows-2"); !strings.Contains(got, "繼續既有對話") {
+		t.Fatalf("expected resume option, got %s", got)
 	}
 }
 
@@ -337,7 +392,7 @@ func TestUsageViewPrintsAndReturnsToTheMenu(t *testing.T) {
 		"five_hour": {"used_percentage": 55.0}
 	}`, resolvedClaudeHome, checkedAt), 0o644)
 
-	calls := fakeFzf(t, home, key("usage"), key("chat"), key("claude-1"))
+	calls := fakeFzf(t, home, key("usage"), key("chat"), key("claude-1"), key("new"))
 	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
 	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
 
@@ -384,7 +439,7 @@ func TestUsageViewWithNoSnapshotDirectoryShowsNoDataForEveryAccount(t *testing.T
 
 	usageDir := filepath.Join(home, "usage-not-created-yet")
 
-	calls := fakeFzf(t, home, key("usage"), key("chat"), key("claude-1"))
+	calls := fakeFzf(t, home, key("usage"), key("chat"), key("claude-1"), key("new"))
 	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
 	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
 
@@ -434,7 +489,7 @@ func TestUsageViewWithAnEmptySnapshotDirectoryShowsNoDataForEveryAccount(t *test
 	usageDir := filepath.Join(home, "usage")
 	os.MkdirAll(usageDir, 0o755)
 
-	calls := fakeFzf(t, home, key("usage"), key("chat"), key("claude-1"))
+	calls := fakeFzf(t, home, key("usage"), key("chat"), key("claude-1"), key("new"))
 	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
 	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
 
@@ -475,7 +530,7 @@ func TestUsageViewSurvivesAnUnreadableSnapshotDirectory(t *testing.T) {
 	usageDir := filepath.Join(home, "usage-is-a-file")
 	os.WriteFile(usageDir, []byte("not a directory"), 0o644)
 
-	calls := fakeFzf(t, home, key("usage"), key("chat"), key("claude-1"))
+	calls := fakeFzf(t, home, key("usage"), key("chat"), key("claude-1"), key("new"))
 	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
 	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
 
@@ -960,7 +1015,7 @@ func TestManageAccountsSetsUsageDirectoryAndReportsIt(t *testing.T) {
 
 	customUsageDir := filepath.Join(home, "custom-usage")
 
-	calls := fakeFzf(t, home, key("accounts"), key("usage-dir"), typed(customUsageDir), key("back"), key("chat"), key("claude-1"))
+	calls := fakeFzf(t, home, key("accounts"), key("usage-dir"), typed(customUsageDir), cancel(), key("chat"), key("claude-1"), key("new"))
 	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
 	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
 
@@ -1010,7 +1065,7 @@ func TestManageAccountsClearsUsageDirectoryOnEmptyInput(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fakeFzf(t, home, key("accounts"), key("usage-dir"), typed(""), key("back"), key("chat"), key("claude-1"))
+	fakeFzf(t, home, key("accounts"), key("usage-dir"), typed(""), cancel(), key("chat"), key("claude-1"), key("new"))
 	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
 	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
 
@@ -1064,7 +1119,7 @@ func TestManageAccountsOffersStatuslineAction(t *testing.T) {
 	registryPath := filepath.Join(home, "accounts.json")
 	writeRegistry(t, registryPath, claudeHome, codexHome)
 
-	calls := fakeFzf(t, home, key("accounts"), key("back"), key("chat"), key("claude-1"))
+	calls := fakeFzf(t, home, key("accounts"), cancel(), key("chat"), key("claude-1"), key("new"))
 	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
 	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
 
@@ -1093,7 +1148,7 @@ func TestManageAccountsStatuslineEnablesUsageDir(t *testing.T) {
 	writeRegistry(t, registryPath, claudeHome, codexHome)
 	usageDir := filepath.Join(home, "usage")
 
-	fakeFzf(t, home, key("accounts"), key("statusline"), key("enable"), key("back"), key("chat"), key("claude-1"))
+	fakeFzf(t, home, key("accounts"), key("statusline"), key("enable"), cancel(), key("chat"), key("claude-1"), key("new"))
 	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
 	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
 
@@ -1130,7 +1185,7 @@ func TestManageAccountsStatuslineRefusesWhenStatusLineMissing(t *testing.T) {
 	registryPath := filepath.Join(home, "accounts.json")
 	writeRegistry(t, registryPath, claudeHome, codexHome)
 
-	fakeFzf(t, home, key("accounts"), key("statusline"), key("back"), key("chat"), key("claude-1"))
+	fakeFzf(t, home, key("accounts"), key("statusline"), cancel(), key("chat"), key("claude-1"), key("new"))
 	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
 	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
 
@@ -1180,7 +1235,7 @@ func TestManageAccountsOffersTrustAction(t *testing.T) {
 	registryPath := filepath.Join(home, "accounts.json")
 	writeRegistry(t, registryPath, claudeHome, codexHome)
 
-	calls := fakeFzf(t, home, key("accounts"), key("back"), key("chat"), key("claude-1"))
+	calls := fakeFzf(t, home, key("accounts"), cancel(), key("chat"), key("claude-1"), key("new"))
 	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
 	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
 
@@ -1218,7 +1273,7 @@ func TestManageAccountsTrustFillsAndReportsField(t *testing.T) {
 	registryPath := filepath.Join(home, "accounts.json")
 	writeRegistryTwoClaudeAccounts(t, registryPath, claude1Home, claude2Home, codexHome)
 
-	fakeFzf(t, home, key("accounts"), key("trust"), key("claude-1"), key("confirm"), key("back"), key("chat"), key("claude-1"))
+	fakeFzf(t, home, key("accounts"), key("trust"), key("claude-1"), key("confirm"), cancel(), key("chat"), key("claude-1"), key("new"))
 	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
 	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
 
@@ -1259,7 +1314,7 @@ func TestManageAccountsTrustRefusesCodexSourceWithoutTouchingFiles(t *testing.T)
 	registryPath := filepath.Join(home, "accounts.json")
 	writeRegistry(t, registryPath, claudeHome, codexHome)
 
-	fakeFzf(t, home, key("accounts"), key("trust"), key("codex-1"), key("back"), key("chat"), key("claude-1"))
+	fakeFzf(t, home, key("accounts"), key("trust"), key("codex-1"), cancel(), key("chat"), key("claude-1"), key("new"))
 	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
 	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
 
@@ -1312,7 +1367,7 @@ func TestManageAccountsTrustCancelWritesNothing(t *testing.T) {
 	registryPath := filepath.Join(home, "accounts.json")
 	writeRegistryTwoClaudeAccounts(t, registryPath, claude1Home, claude2Home, codexHome)
 
-	fakeFzf(t, home, key("accounts"), key("trust"), key("claude-1"), key("cancel"), key("back"), key("chat"), key("claude-1"))
+	fakeFzf(t, home, key("accounts"), key("trust"), key("claude-1"), key("cancel"), cancel(), key("chat"), key("claude-1"), key("new"))
 	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
 	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
 
