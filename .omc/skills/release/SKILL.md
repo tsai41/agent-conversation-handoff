@@ -51,6 +51,6 @@ Release with `generate_release_notes: true`).
   push — pushing commits to `main` alone does nothing.
 - The workflow builds macOS binaries only (`ach-darwin-arm64`,
   `ach-darwin-amd64`); there's no Linux/Windows asset.
-- `make install` needs `gh` authenticated (repo is private) plus `fzf`,
+- `make install` needs `fzf` (and `curl`, or an authenticated `gh`),
   and either `claude` or `codex` on PATH — it hard-fails with a Chinese
   error message pointing at whichever is missing.

@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Installs the ach/ccs binary from the latest GitHub Release. No git clone,
-# no Go toolchain -- only fzf and gh (repo is private, so gh auth is what
-# lets the release download succeed).
+# no Go toolchain -- only fzf and curl. If gh is installed and authenticated
+# it is used for the download; otherwise curl fetches the public release.
 set -euo pipefail
 
 REPO="tsai41/agent-conversation-handoff"
@@ -17,10 +17,15 @@ command -v fzf >/dev/null 2>&1 || {
 	echo "缺少 fzf。macOS 可執行：brew install fzf" >&2
 	exit 1
 }
-command -v gh >/dev/null 2>&1 || {
-	echo "缺少 gh (GitHub CLI)。repo 為 private，需要 gh 才能抓 release。macOS 可執行：brew install gh，然後 gh auth login" >&2
-	exit 1
-}
+USE_GH=0
+if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+	USE_GH=1
+else
+	command -v curl >/dev/null 2>&1 || {
+		echo "缺少 curl，且 gh 未安裝或未登入。請安裝 curl 或執行 gh auth login" >&2
+		exit 1
+	}
+fi
 
 case "$(uname -m)" in
 arm64) ASSET="ach-darwin-arm64" ;;
@@ -30,8 +35,14 @@ esac
 mkdir -p "$BIN_DIR"
 tmpdir=$(mktemp -d "$BIN_DIR/.${COMMAND}.download.XXXXXX")
 trap 'rm -rf "$tmpdir"' EXIT
-gh release download --repo "$REPO" --pattern "$ASSET" --output "$tmpdir/$ASSET" --clobber
-gh release download --repo "$REPO" --pattern "SHA256SUMS" --output "$tmpdir/SHA256SUMS" --clobber
+if [ "$USE_GH" = 1 ]; then
+	gh release download --repo "$REPO" --pattern "$ASSET" --output "$tmpdir/$ASSET" --clobber
+	gh release download --repo "$REPO" --pattern "SHA256SUMS" --output "$tmpdir/SHA256SUMS" --clobber
+else
+	BASE_URL="https://github.com/$REPO/releases/latest/download"
+	curl -fsSL "$BASE_URL/$ASSET" -o "$tmpdir/$ASSET"
+	curl -fsSL "$BASE_URL/SHA256SUMS" -o "$tmpdir/SHA256SUMS"
+fi
 (cd "$tmpdir" && grep " $ASSET\$" SHA256SUMS | shasum -a 256 -c -)
 chmod +x "$tmpdir/$ASSET"
 

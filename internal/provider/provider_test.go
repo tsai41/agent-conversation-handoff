@@ -48,8 +48,8 @@ func TestSetEnvDoesNotMatchAKeyThatIsAPrefixOfAnother(t *testing.T) {
 }
 
 func TestLaunchBannerNamesProviderNumberAliasAndHome(t *testing.T) {
-	got := launchBanner(registry.Account{ID: "claude-4", Provider: "claude", Number: 4, Alias: "orli", Home: "/tmp/home-4"})
-	want := "ccs 啟動帳號：Claude #4 orli（/tmp/home-4）"
+	got := launchBanner(registry.Account{ID: "claude-4", Provider: "claude", Number: 4, Alias: "work", Home: "/tmp/home-4"})
+	want := "ccs 啟動帳號：Claude #4 work（/tmp/home-4）"
 	if got != want {
 		t.Fatalf("got %q, want %q", got, want)
 	}

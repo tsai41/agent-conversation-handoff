@@ -20,7 +20,7 @@
 ## 前置需求
 
 - `fzf`
-- `gh`（GitHub CLI，已 `gh auth login`）——此 repo 為 private，安裝時需要用 gh 認證抓 release
+- `curl`（macOS 內建）；若已安裝並登入 `gh`，安裝腳本會改用 gh 下載 release（選用）
 - Claude Code CLI（`claude`）或 Codex CLI（`codex`）至少一個
 - macOS（arm64 或 amd64）
 
@@ -29,8 +29,7 @@
 macOS 可用 Homebrew 安裝：
 
 ```bash
-brew install fzf gh
-gh auth login
+brew install fzf
 ```
 
 ## 安裝
@@ -38,13 +37,13 @@ gh auth login
 不需要 clone 整個 repo，直接抓 `install.sh` 執行即可：
 
 ```bash
-gh api repos/tsai41/agent-conversation-handoff/contents/install.sh -H "Accept: application/vnd.github.raw" | bash
+curl -fsSL https://raw.githubusercontent.com/tsai41/agent-conversation-handoff/main/install.sh | bash
 ```
 
 會依本機 arch 從最新的 GitHub Release 下載對應的 `ach` 二進位到 `~/bin/ccs`。若要改指令名稱或安裝路徑：
 
 ```bash
-COMMAND=myalias BIN_DIR=~/bin gh api repos/tsai41/agent-conversation-handoff/contents/install.sh -H "Accept: application/vnd.github.raw" | bash
+curl -fsSL https://raw.githubusercontent.com/tsai41/agent-conversation-handoff/main/install.sh | COMMAND=myalias BIN_DIR=~/bin bash
 ```
 
 若 `~/bin` 已有同名指令，安裝時會先建立時間戳備份。
@@ -68,7 +67,7 @@ ccs
 如果已經知道 Claude 對話 ID，推薦直接使用快捷模式：
 
 ```bash
-ccs h 019fcb8e
+ccs h bbbbbbbb
 ```
 
 快捷模式會自動搜尋所有已登記的 Claude 帳號，並交給已安裝的 Codex 帳號；只有多個 Codex 帳號可用時才會顯示目標選單。`quick-handoff` 是同一功能的完整別名。
@@ -246,7 +245,7 @@ snapshot 的 `config_dir` 是用檔案系統（而非字串比對）去對應到
 
 對話清單只列目前專案、且只留最新 5 筆，所以你知道 id 的那個對話常常不在清單裡。第 2 步直接在搜尋框把 id 打進去就能指定，不用先選任何一列。清單最後那一列「✎ 輸入對話 ID」走的是同一條路徑，留著只是讓人知道有這個用法。
 
-- 可以只打前綴（例如 `019fcb8e`），大小寫不拘，至少 4 碼；多筆符合會依時間新到舊再讓你選一次。
+- 可以只打前綴（例如 `bbbbbbbb`），大小寫不拘，至少 4 碼；多筆符合會依時間新到舊再讓你選一次。
 - 會在所有已登記帳號裡找，來源帳號以實際找到的位置為準，不受第 1 步選的來源限制；接手帳號在來源確定之後才選。
 - 不限專案。對話若是在別的目錄開的，會先印出原本的目錄提醒你，交接資料仍建立在目前專案。
 - 專案完全沒有對話紀錄時一樣走得到。

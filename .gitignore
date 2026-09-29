@@ -2,3 +2,8 @@ __pycache__/
 *.py[cod]
 .DS_Store
 /dist/
+
+.claude/
+.omc/*
+!.omc/skills/
+.agent-handoffs/

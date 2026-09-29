@@ -309,7 +309,7 @@ func TestRunResumesTheSelectedAccountSession(t *testing.T) {
 		t.Fatal(err)
 	}
 	sessionPath := filepath.Join(sessionDir, "resume.jsonl")
-	const sessionID = "edcda8ee-19af-45ac-ad5d-206136874fdd"
+	const sessionID = "aaaaaaaa-1111-4222-8333-44444444abcd"
 	if err := os.WriteFile(sessionPath, []byte(fmt.Sprintf(`{"type":"user","sessionId":%q,"timestamp":"2026-09-29T09:00:00Z","message":{"content":"continue this"}}`+"\n", sessionID)), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -372,7 +372,7 @@ func TestRunResumeByTypedIDLaunchesInTheSessionsRecordedDirectory(t *testing.T) 
 			if err := os.MkdirAll(sessionDir, 0o755); err != nil {
 				t.Fatal(err)
 			}
-			const sessionID = "edcda8ee-19af-45ac-ad5d-206136874fdd"
+			const sessionID = "aaaaaaaa-1111-4222-8333-44444444abcd"
 			line := fmt.Sprintf(`{"type":"user","sessionId":%q,"cwd":%q,"timestamp":"2026-09-29T09:00:00Z","message":{"content":"continue this"}}`+"\n", sessionID, recorded)
 			if err := os.WriteFile(filepath.Join(sessionDir, sessionID+".jsonl"), []byte(line), 0o644); err != nil {
 				t.Fatal(err)
@@ -380,7 +380,7 @@ func TestRunResumeByTypedIDLaunchesInTheSessionsRecordedDirectory(t *testing.T) 
 
 			registryPath := filepath.Join(home, "accounts.json")
 			writeRegistry(t, registryPath, claudeHome, codexHome)
-			fakeFzf(t, home, key("chat"), key("claude-1"), key("resume"), typed("edcda8ee"))
+			fakeFzf(t, home, key("chat"), key("claude-1"), key("resume"), typed("aaaaaaaa"))
 			pwdCapture := filepath.Join(home, "claude-pwd")
 			writeScript(t, filepath.Join(home, "bin", "claude"), fmt.Sprintf("#!/usr/bin/env bash\npwd -P > %q\n", pwdCapture))
 			writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
@@ -423,8 +423,8 @@ func TestRunResumeByTypedIDWithSeveralMatchesLaunchesInThePickedSessionsDirector
 		id  string
 		cwd string
 	}{
-		{"edcda8ee-0000-45ac-ad5d-206136874fdd", firstDir},
-		{"edcda8ee-1111-45ac-ad5d-206136874fdd", secondDir},
+		{"aaaaaaaa-0000-4222-8333-44444444abcd", firstDir},
+		{"aaaaaaaa-2222-4222-8333-44444444abcd", secondDir},
 	}
 	var paths []string
 	for _, s := range sessions {
@@ -442,7 +442,7 @@ func TestRunResumeByTypedIDWithSeveralMatchesLaunchesInThePickedSessionsDirector
 
 	registryPath := filepath.Join(home, "accounts.json")
 	writeRegistry(t, registryPath, claudeHome, codexHome)
-	fakeFzf(t, home, key("chat"), key("claude-1"), key("resume"), typed("edcda8ee"), row(paths[1]))
+	fakeFzf(t, home, key("chat"), key("claude-1"), key("resume"), typed("aaaaaaaa"), row(paths[1]))
 	argvCapture := filepath.Join(home, "claude-argv")
 	pwdCapture := filepath.Join(home, "claude-pwd")
 	writeScript(t, filepath.Join(home, "bin", "claude"), fmt.Sprintf("#!/usr/bin/env bash\npwd -P > %q\nprintf '%%s\\n' \"$@\" > %q\n", pwdCapture, argvCapture))
@@ -703,7 +703,7 @@ func TestHandoffUsesAnIDTypedIntoTheSearchBox(t *testing.T) {
 	os.MkdirAll(claudeHome, 0o755)
 	os.MkdirAll(codexSessions, 0o755)
 
-	longUUID := "019fcb8e-b8cf-76b1-bc81-e444a74c4d60"
+	longUUID := "bbbbbbbb-1111-7222-8333-444444444444"
 	sessionPath := filepath.Join(codexSessions, "rollout-2026-08-04T14-55-56-"+longUUID+".jsonl")
 	os.WriteFile(sessionPath, []byte(fmt.Sprintf(
 		`{"type":"session_meta","payload":{"id":%q,"cwd":%q}}`+"\n"+
@@ -715,7 +715,7 @@ func TestHandoffUsesAnIDTypedIntoTheSearchBox(t *testing.T) {
 
 	// The source picked is claude-1, but the typed id belongs to codex-1,
 	// so the source flips and the target picker offers claude-1 instead.
-	calls := fakeFzf(t, home, key("handoff"), key("claude-1"), typed("019fcb8e"), key("claude-1"))
+	calls := fakeFzf(t, home, key("handoff"), key("claude-1"), typed("bbbbbbbb"), key("claude-1"))
 
 	launched := filepath.Join(home, "launched")
 	writeScript(t, filepath.Join(home, "bin", "claude"), fmt.Sprintf(
@@ -781,7 +781,7 @@ func TestHandoffPicksSourceThenConversationThenTarget(t *testing.T) {
 	os.MkdirAll(project, 0o755)
 	claudeHome := filepath.Join(home, ".claude")
 	codexHome := filepath.Join(home, ".codex")
-	longUUID := "edcda8ee-19af-45ac-ad5d-206136874fdd"
+	longUUID := "aaaaaaaa-1111-4222-8333-44444444abcd"
 	// The subprocess resolves its cwd via os.Getwd(), which returns the
 	// symlink-resolved path (e.g. /private/var/... on macOS), so the
 	// session directory must be keyed off the same resolved path.
@@ -819,7 +819,7 @@ func TestHandoffPicksSourceThenConversationThenTarget(t *testing.T) {
 		t.Fatalf("expected the source picker path bar in the picker, got argv: %s", sourceArgv)
 	}
 	rows := callFile(t, calls, "rows-2")
-	if !strings.Contains(rows, "edcda8ee…4fdd") {
+	if !strings.Contains(rows, "aaaaaaaa…abcd") {
 		t.Fatalf("expected truncated session id in rows, got: %s", rows)
 	}
 	if strings.Contains(rows, longUUID) {
@@ -886,7 +886,7 @@ func TestHandoffEscAtTargetPickerReturnsToSessionPicker(t *testing.T) {
 	os.MkdirAll(project, 0o755)
 	claudeHome := filepath.Join(home, ".claude")
 	codexHome := filepath.Join(home, ".codex")
-	longUUID := "edcda8ee-19af-45ac-ad5d-206136874fdd"
+	longUUID := "aaaaaaaa-1111-4222-8333-44444444abcd"
 	resolvedProject, err := filepath.EvalSymlinks(project)
 	if err != nil {
 		t.Fatal(err)
@@ -909,7 +909,7 @@ func TestHandoffEscAtTargetPickerReturnsToSessionPicker(t *testing.T) {
 	}
 
 	sessionAgain := callFile(t, calls, "rows-4")
-	if !strings.Contains(sessionAgain, "edcda8ee…4fdd") {
+	if !strings.Contains(sessionAgain, "aaaaaaaa…abcd") {
 		t.Fatalf("expected ESC at the target picker to return to the session picker, got: %s", sessionAgain)
 	}
 }
@@ -937,7 +937,7 @@ func TestQuickHandoffByIDFindsClaudeConversationAndLaunchesCodex(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	id := "019fcb8e-b8cf-76b1-bc81-e444a74c4d60"
+	id := "bbbbbbbb-1111-7222-8333-444444444444"
 	sessionPath := filepath.Join(claudeProjectDir, id+".jsonl")
 	content := fmt.Sprintf(`{"type":"user","sessionId":%q,"message":{"content":"continue this"}}`+"\n", id)
 	if err := os.WriteFile(sessionPath, []byte(content), 0o600); err != nil {
@@ -953,7 +953,7 @@ func TestQuickHandoffByIDFindsClaudeConversationAndLaunchesCodex(t *testing.T) {
 	))
 	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
 
-	if _, stderr, err := runQuickHandoff(t, registryPath, "019fcb8e", project); err != nil {
+	if _, stderr, err := runQuickHandoff(t, registryPath, "bbbbbbbb", project); err != nil {
 		t.Fatalf("quick handoff failed: %v\nstderr: %s", err, stderr)
 	}
 	launchedContent, err := os.ReadFile(launched)

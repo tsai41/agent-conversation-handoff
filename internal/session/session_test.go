@@ -13,8 +13,8 @@ func TestShortIDTruncatesLongIDsOnly(t *testing.T) {
 	if got := ShortID("short"); got != "short" {
 		t.Fatalf("expected short id unchanged, got %q", got)
 	}
-	long := "edcda8ee-19af-45ac-ad5d-206136874fdd"
-	want := "edcda8ee…4fdd"
+	long := "aaaaaaaa-1111-4222-8333-44444444abcd"
+	want := "aaaaaaaa…abcd"
 	if got := ShortID(long); got != want {
 		t.Fatalf("expected %q, got %q", want, got)
 	}
@@ -32,7 +32,7 @@ func TestClaudeCandidatesScopesToProjectDirectory(t *testing.T) {
 	if err := os.MkdirAll(sessionDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	line := `{"type":"user","sessionId":"edcda8ee-19af-45ac-ad5d-206136874fdd","message":{"content":"continue this"}}` + "\n"
+	line := `{"type":"user","sessionId":"aaaaaaaa-1111-4222-8333-44444444abcd","message":{"content":"continue this"}}` + "\n"
 	if err := os.WriteFile(filepath.Join(sessionDir, "source.jsonl"), []byte(line), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -44,10 +44,10 @@ func TestClaudeCandidatesScopesToProjectDirectory(t *testing.T) {
 	if len(candidates) != 1 {
 		t.Fatalf("expected 1 candidate, got %d", len(candidates))
 	}
-	if !strings.Contains(candidates[0].Description, "edcda8ee…4fdd") {
+	if !strings.Contains(candidates[0].Description, "aaaaaaaa…abcd") {
 		t.Fatalf("expected truncated id in description, got %q", candidates[0].Description)
 	}
-	if strings.Contains(candidates[0].Description, "edcda8ee-19af-45ac-ad5d-206136874fdd") {
+	if strings.Contains(candidates[0].Description, "aaaaaaaa-1111-4222-8333-44444444abcd") {
 		t.Fatalf("full uuid leaked into description: %q", candidates[0].Description)
 	}
 	if !strings.Contains(candidates[0].Description, "continue this") {
@@ -292,7 +292,7 @@ func TestCodexCandidatesOrderByFilenameStartTimeNotMtime(t *testing.T) {
 
 func TestCodexSessionStartTimeParsesTheRolloutFilename(t *testing.T) {
 	dir := t.TempDir()
-	path := filepath.Join(dir, "rollout-2026-05-22T11-40-06-019e4dc4-d76d-7f61-85f8-481823cd9abf.jsonl")
+	path := filepath.Join(dir, "rollout-2026-05-22T11-40-06-dddddddd-1111-7222-8333-444444444444.jsonl")
 	if err := os.WriteFile(path, []byte(""), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -340,13 +340,13 @@ func TestFindCodexByIDMatchesFullIDAndPrefixAcrossProjects(t *testing.T) {
 	if err := os.MkdirAll(elsewhere, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	wanted := "019fcb8e-b8cf-76b1-bc81-e444a74c4d60"
+	wanted := "bbbbbbbb-1111-7222-8333-444444444444"
 	other := "019aaaaa-0000-0000-0000-000000000000"
 	wantedPath := filepath.Join(sessionsDir, "rollout-2026-08-04T14-55-56-"+wanted+".jsonl")
 	writeSession(t, wantedPath, mustAbs(t, elsewhere), wanted, "hand this over")
 	writeSession(t, filepath.Join(sessionsDir, "rollout-2026-08-04T09-00-00-"+other+".jsonl"), mustAbs(t, elsewhere), other, "unrelated")
 
-	for _, fragment := range []string{wanted, "019fcb8e", "019FCB8E"} {
+	for _, fragment := range []string{wanted, "bbbbbbbb", "BBBBBBBB"} {
 		matches, err := FindCodexByID(codexHome, fragment)
 		if err != nil {
 			t.Fatalf("fragment %q: %v", fragment, err)
@@ -417,7 +417,7 @@ func TestFindCodexByIDReturnsNothingForAnUnknownID(t *testing.T) {
 func TestFindClaudeByIDScansEveryProjectDirectory(t *testing.T) {
 	dir := t.TempDir()
 	claudeHome := filepath.Join(dir, ".claude")
-	wanted := "5e9bb808-3048-4569-bf1b-338f1101f7b0"
+	wanted := "cccccccc-1111-4222-8333-44444444dcba"
 	elsewhere := "/Users/someone/go/src/other"
 
 	for _, project := range []struct{ encoded, id, cwd string }{
@@ -435,7 +435,7 @@ func TestFindClaudeByIDScansEveryProjectDirectory(t *testing.T) {
 		}
 	}
 
-	matches, err := FindClaudeByID(claudeHome, "5e9bb808")
+	matches, err := FindClaudeByID(claudeHome, "cccccccc")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -448,7 +448,7 @@ func TestFindClaudeByIDScansEveryProjectDirectory(t *testing.T) {
 	if matches[0].CWD != elsewhere {
 		t.Fatalf("expected cwd %s, got %s", elsewhere, matches[0].CWD)
 	}
-	if !strings.Contains(matches[0].Description, "5e9bb808…f7b0") {
+	if !strings.Contains(matches[0].Description, "cccccccc…dcba") {
 		t.Fatalf("expected truncated id in description, got %q", matches[0].Description)
 	}
 	if strings.Contains(matches[0].Description, wanted) {
@@ -545,8 +545,8 @@ func TestClaudeProjectIDReplacesEveryNonAlphanumericCharacter(t *testing.T) {
 		project string
 		want    string
 	}{
-		{"/Users/karen/.zsh.d", "-Users-karen--zsh-d"},
-		{"/Users/karen/go/src/agent-conversation-handoff", "-Users-karen-go-src-agent-conversation-handoff"},
+		{"/Users/someone/.config.d", "-Users-someone--config-d"},
+		{"/Users/someone/work_dir/my-project", "-Users-someone-work-dir-my-project"},
 		{"/tmp/my_project v2", "-tmp-my-project-v2"},
 	}
 	for _, tt := range tests {
