@@ -1191,7 +1191,7 @@ func launchAccount(registryPath string) error {
 		return fmt.Errorf("no conversation matches id: %s", typed)
 	}
 	if len(matches) == 1 {
-		return provider.ResumeSession(account, matches[0].SessionID, resumeDir(account, matches[0]))
+		return provider.ResumeSession(account, matches[0].SessionID, matches[0].CWD)
 	}
 	resumeCandidates := make([]session.Candidate, len(matches))
 	for i, match := range matches {
@@ -1211,17 +1211,7 @@ func launchAccount(registryPath string) error {
 			chosen = match
 		}
 	}
-	return provider.ResumeSession(account, sessionID, resumeDir(account, chosen))
-}
-
-// resumeDir is where to launch a resume found by id. Only Claude is known to
-// refuse a conversation recorded in another directory; for Codex the current
-// directory is kept.
-func resumeDir(account registry.Account, match session.Match) string {
-	if account.Provider != "claude" {
-		return ""
-	}
-	return match.CWD
+	return provider.ResumeSession(account, sessionID, chosen.CWD)
 }
 
 func findSessionsByID(account registry.Account, fragment string) ([]session.Match, error) {
