@@ -11,9 +11,10 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
-	"text/tabwriter"
 	"time"
+	"unicode"
 
 	"github.com/tsai41/agent-conversation-handoff/internal/registry"
 )
@@ -228,66 +229,99 @@ func windowBeats(a, b *Window) bool {
 	return a.checkedAt.After(b.checkedAt)
 }
 
+// Row is one account's display cells. Label carries no archived suffix:
+// Archived is rendered as its own column in the table and as a suffix in the
+// stacked layout.
 type Row struct {
 	Label     string
+	Archived  bool
 	FiveHour  string
 	SevenDay  string
 	Freshness string
 }
 
-// BuildRows renders one Row per account row (in the given order), pairing
-// each with its matched snapshot if any. now is the reference time for
-// staleness and relative-age wording, passed in so tests are not tied to
-// the wall clock.
-func BuildRows(accountRows []struct{ ID, Label string }, matches map[string]Snapshot, now time.Time) []Row {
+const (
+	noData           = "–"
+	unsupportedText  = "不支援"
+	noSnapshotText   = "沒有資料"
+	resetText        = "已重置"
+	clockSkewText    = "時間異常"
+	archivedText     = "已封存"
+	codexProvider    = "codex"
+	columnGap        = 2
+	stackedLabelCols = 6
+)
+
+// BuildRows renders one Row per account in registry.Rows order, pairing each
+// with its matched snapshot if any. now is the reference time for staleness
+// and relative wording, passed in so tests are not tied to the wall clock.
+// Codex accounts never produce snapshots, so their windows read as
+// unsupported rather than as missing data.
+func BuildRows(r registry.Registry, matches map[string]Snapshot, now time.Time) []Row {
+	accounts := make(map[string]registry.Account, len(r.Accounts))
+	for _, account := range r.Accounts {
+		accounts[account.ID] = account
+	}
+	accountRows := registry.Rows(r)
 	rows := make([]Row, 0, len(accountRows))
 	for _, ar := range accountRows {
-		snap, ok := matches[ar.ID]
-		if !ok {
-			rows = append(rows, Row{Label: ar.Label, FiveHour: "–", SevenDay: "–", Freshness: "沒有資料"})
-			continue
+		account := accounts[ar.ID]
+		row := Row{
+			Label:    strings.TrimSuffix(ar.Label, registry.ArchivedSuffix),
+			Archived: account.Archived,
 		}
-		rows = append(rows, Row{
-			Label:     ar.Label,
-			FiveHour:  windowText(snap.FiveHour, snap.CheckedAt, fiveHourWindow, "5 小時", now),
-			SevenDay:  windowText(snap.SevenDay, snap.CheckedAt, sevenDayWindow, "7 天", now),
-			Freshness: freshnessText(snap.CheckedAt, now),
-		})
+		snap, ok := matches[ar.ID]
+		switch {
+		case account.Provider == codexProvider:
+			row.FiveHour, row.SevenDay, row.Freshness = unsupportedText, unsupportedText, noData
+		case !ok:
+			row.FiveHour, row.SevenDay, row.Freshness = noData, noData, noSnapshotText
+		default:
+			row.FiveHour = windowText(snap.FiveHour, snap.CheckedAt, fiveHourWindow, now)
+			row.SevenDay = windowText(snap.SevenDay, snap.CheckedAt, sevenDayWindow, now)
+			row.Freshness = ageText(snap.CheckedAt, now)
+		}
+		rows = append(rows, row)
 	}
 	return rows
 }
 
-// windowText renders one window's percentage, or explains why the number
-// shown is not the current usage. A missing window, or one with no
-// percentage in its snapshot, is never shown as 0%. A reset at or before
-// now is called out instead of the stale percentage, since real usage is
-// then almost certainly lower; when the snapshot carries no resets_at at
-// all, the window's own nominal length still lets a old-enough checkedAt
-// say the same thing -- a 5-hour window's snapshot older than 5 hours has
-// certainly reset, and likewise for the 7-day window at 7 days.
-func windowText(w *Window, checkedAt time.Time, length time.Duration, label string, now time.Time) string {
+// windowText renders one window's percentage with its relative reset time,
+// or explains why the number is not the current usage. A missing window, or
+// one with no percentage in its snapshot, is never shown as 0%. A reset at or
+// before now shows only the reset, never the stale percentage, since real
+// usage is then almost certainly lower; when the snapshot carries no
+// resets_at at all, the window's nominal length still lets an old-enough
+// checkedAt say the same thing.
+func windowText(w *Window, checkedAt time.Time, length time.Duration, now time.Time) string {
 	if !w.hasData() {
-		return "–"
+		return noData
 	}
 	if !w.checkedAt.IsZero() {
 		checkedAt = w.checkedAt
 	}
 	if w.ResetsAt != nil {
 		if !w.ResetsAt.After(now) {
-			return fmt.Sprintf("已重置於 %s（原用量已過期）", w.ResetsAt.Local().Format("01/02 15:04"))
+			return resetText
 		}
-		return fmt.Sprintf("%.0f%%（%s 重置）", *w.UsedPercentage, w.ResetsAt.Local().Format("01/02 15:04"))
+		return fmt.Sprintf("%.0f%%  %s", *w.UsedPercentage, untilText(w.ResetsAt.Sub(now)))
 	}
 	if now.Sub(checkedAt) >= length {
-		return fmt.Sprintf("已重置（資料逾 %s，原用量已過期）", label)
+		return resetText
 	}
 	return fmt.Sprintf("%.0f%%", *w.UsedPercentage)
 }
 
-// freshnessText reports both the absolute local time a snapshot was taken
-// and its relative age, so a stale row is never mistaken for a current one.
-func freshnessText(checkedAt, now time.Time) string {
-	return fmt.Sprintf("%s（%s）", checkedAt.Local().Format("01/02 15:04"), ageText(checkedAt, now))
+// untilText words a positive duration as a coarse "reset in" phrase, rounding
+// to the nearest unit and never below one.
+func untilText(d time.Duration) string {
+	if minutes := int(math.Ceil(d.Minutes())); minutes < 60 {
+		return fmt.Sprintf("%d 分鐘後重置", max(minutes, 1))
+	}
+	if hours := int(math.Round(d.Hours())); hours < 24 {
+		return fmt.Sprintf("%d 小時後重置", max(hours, 1))
+	}
+	return fmt.Sprintf("%d 天後重置", max(int(math.Round(d.Hours()/24)), 1))
 }
 
 // ageText treats a checkedAt after now as clock skew on the writing
@@ -296,7 +330,7 @@ func freshnessText(checkedAt, now time.Time) string {
 func ageText(t, now time.Time) string {
 	d := now.Sub(t)
 	if d < 0 {
-		return "時間異常（早於現在，來源主機時鐘可能不同步）"
+		return clockSkewText
 	}
 	switch {
 	case d < time.Minute:
@@ -310,11 +344,110 @@ func ageText(t, now time.Time) string {
 	}
 }
 
-func Fprint(w io.Writer, rows []Row) {
-	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "帳號\t5 小時\t7 天\t資料時間")
-	for _, row := range rows {
-		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\n", row.Label, row.FiveHour, row.SevenDay, row.Freshness)
+// displayWidth is the number of terminal columns s occupies: East Asian
+// Wide and Fullwidth runes and emoji take two, combining marks zero,
+// everything else one.
+func displayWidth(s string) int {
+	n := 0
+	for _, r := range s {
+		switch {
+		case unicode.Is(unicode.Mn, r):
+		case isWide(r):
+			n += 2
+		default:
+			n++
+		}
 	}
-	tw.Flush()
+	return n
+}
+
+func isWide(r rune) bool {
+	switch {
+	case r >= 0x1100 && r <= 0x115F, // Hangul Jamo
+		r >= 0x2E80 && r <= 0x303E, // CJK radicals, symbols and punctuation
+		r >= 0x3041 && r <= 0x33FF, // kana, CJK compatibility
+		r >= 0x3400 && r <= 0x4DBF,
+		r >= 0x4E00 && r <= 0x9FFF,
+		r >= 0xA000 && r <= 0xA4CF,
+		r >= 0xAC00 && r <= 0xD7A3, // Hangul syllables
+		r >= 0xF900 && r <= 0xFAFF,
+		r >= 0xFE30 && r <= 0xFE6F,
+		r >= 0xFF00 && r <= 0xFF60, // fullwidth forms
+		r >= 0xFFE0 && r <= 0xFFE6,
+		r >= 0x1F300 && r <= 0x1F64F, // emoji
+		r >= 0x1F900 && r <= 0x1F9FF,
+		r >= 0x2600 && r <= 0x27BF,
+		r >= 0x20000 && r <= 0x3FFFD:
+		return true
+	}
+	return false
+}
+
+func padRight(s string, width int) string {
+	if gap := width - displayWidth(s); gap > 0 {
+		return s + strings.Repeat(" ", gap)
+	}
+	return s
+}
+
+// Fprint writes rows as an aligned table, or as stacked per-account blocks
+// when the table would be wider than width terminal columns. Cells are padded
+// by display width, so CJK text lines up; tabwriter counts bytes and cannot.
+// The status column is left out unless some row is archived.
+func Fprint(w io.Writer, rows []Row, width int) {
+	showStatus := slices.ContainsFunc(rows, func(r Row) bool { return r.Archived })
+	toCells := func(fields ...string) []string {
+		if !showStatus {
+			return slices.Delete(fields, 1, 2)
+		}
+		return fields
+	}
+	cells := make([][]string, 0, len(rows)+1)
+	cells = append(cells, toCells("帳號", "狀態", "5 小時", "7 天", "更新"))
+	for _, row := range rows {
+		status := ""
+		if row.Archived {
+			status = archivedText
+		}
+		cells = append(cells, toCells(row.Label, status, row.FiveHour, row.SevenDay, row.Freshness))
+	}
+	colWidths := make([]int, len(cells[0]))
+	for _, line := range cells {
+		for i, cell := range line {
+			colWidths[i] = max(colWidths[i], displayWidth(cell))
+		}
+	}
+	total := columnGap * (len(colWidths) - 1)
+	for _, cw := range colWidths {
+		total += cw
+	}
+	if total > width {
+		fprintStacked(w, rows)
+		return
+	}
+	gap := strings.Repeat(" ", columnGap)
+	for _, line := range cells {
+		out := make([]string, len(line))
+		for i, cell := range line {
+			out[i] = padRight(cell, colWidths[i])
+		}
+		fmt.Fprintln(w, strings.TrimRight(strings.Join(out, gap), " "))
+	}
+}
+
+func fprintStacked(w io.Writer, rows []Row) {
+	gap := strings.Repeat(" ", columnGap)
+	for i, row := range rows {
+		if i > 0 {
+			fmt.Fprintln(w)
+		}
+		title := row.Label
+		if row.Archived {
+			title += registry.ArchivedSuffix
+		}
+		fmt.Fprintln(w, title)
+		for _, line := range [][2]string{{"5 小時", row.FiveHour}, {"7 天", row.SevenDay}, {"更新", row.Freshness}} {
+			fmt.Fprintf(w, "  %s%s%s\n", padRight(line[0], stackedLabelCols), gap, line[1])
+		}
+	}
 }

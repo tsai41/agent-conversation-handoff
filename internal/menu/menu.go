@@ -1151,8 +1151,8 @@ func showUsage(registryPath, usageDir string) error {
 		snapshots = nil
 	}
 	matches := usage.MatchLatest(r.Accounts, snapshots)
-	rows := usage.BuildRows(registry.Rows(r), matches, time.Now())
-	usage.Fprint(os.Stdout, rows)
+	rows := usage.BuildRows(r, matches, time.Now())
+	usage.Fprint(os.Stdout, rows, terminalWidth())
 	fmt.Printf("資料來源目錄：%s\n", usageDir)
 	if len(matches) == 0 {
 		fmt.Println("目前沒有任何帳號的用量資料：這份資料由外部程式寫入該目錄（可用 ach usage record，見 README）。")

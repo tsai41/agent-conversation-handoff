@@ -94,7 +94,7 @@ func TestUsageRecordWritesSnapshotTheReaderShows(t *testing.T) {
 				t.Fatal(err)
 			}
 			matches := usage.MatchLatest([]registry.Account{{ID: "claude-1", Home: accountHome}}, snaps)
-			rows := usage.BuildRows([]struct{ ID, Label string }{{"claude-1", "Claude 1"}}, matches, time.Now())
+			rows := usage.BuildRows(registry.Registry{Accounts: []registry.Account{{ID: "claude-1", Provider: "claude", Number: 1, Home: accountHome}}}, matches, time.Now())
 			if !strings.HasPrefix(rows[0].FiveHour, "42%") || !strings.HasPrefix(rows[0].SevenDay, "9%") {
 				t.Fatalf("expected the recorded percentages, got %+v", rows[0])
 			}

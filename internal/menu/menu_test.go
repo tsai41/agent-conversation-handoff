@@ -567,8 +567,8 @@ func TestUsageViewWithNoSnapshotDirectoryShowsNoDataForEveryAccount(t *testing.T
 	if !strings.Contains(stdout, "Claude") || !strings.Contains(stdout, "Codex") {
 		t.Fatalf("expected both accounts to be listed, got: %s", stdout)
 	}
-	if strings.Count(stdout, "沒有資料") < 2 {
-		t.Fatalf("expected every row to be marked as having no data, got: %s", stdout)
+	if strings.Count(stdout, "沒有資料") != 1 || strings.Count(stdout, "不支援") != 2 {
+		t.Fatalf("expected the Claude row to have no data and the Codex row to be unsupported, got: %s", stdout)
 	}
 	if strings.Contains(stdout, "0%") {
 		t.Fatalf("expected no window to render as 0%%, got: %s", stdout)
@@ -608,8 +608,8 @@ func TestUsageViewWithAnEmptySnapshotDirectoryShowsNoDataForEveryAccount(t *test
 	if err != nil {
 		t.Fatalf("expected the menu to exit 0 with an empty usage directory, got: %v\nstderr: %s", err, stderr)
 	}
-	if strings.Count(stdout, "沒有資料") < 2 {
-		t.Fatalf("expected every row to be marked as having no data, got: %s", stdout)
+	if strings.Count(stdout, "沒有資料") != 1 || strings.Count(stdout, "不支援") != 2 {
+		t.Fatalf("expected the Claude row to have no data and the Codex row to be unsupported, got: %s", stdout)
 	}
 	if !strings.Contains(stdout, "ach usage record") {
 		t.Fatalf("expected a hint naming the reference writer, got: %s", stdout)
@@ -646,8 +646,8 @@ func TestUsageViewSurvivesAnUnreadableSnapshotDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected the menu to survive an unreadable usage directory, got: %v\nstderr: %s", err, stderr)
 	}
-	if strings.Count(stdout, "沒有資料") < 2 {
-		t.Fatalf("expected every row to be marked as having no data, got: %s", stdout)
+	if strings.Count(stdout, "沒有資料") < 1 || strings.Count(stdout, "不支援") != 2 {
+		t.Fatalf("expected the Claude row to have no data and the Codex row to be unsupported, got: %s", stdout)
 	}
 	if !strings.Contains(stdout, usageDir) {
 		t.Fatalf("expected the unreadable directory's path to be named, got: %s", stdout)
@@ -1574,8 +1574,8 @@ func TestUsageViewListsArchivedAccountLast(t *testing.T) {
 		t.Fatalf("menu run failed: %v\nstderr: %s", err, stderr)
 	}
 	codexAt := strings.Index(stdout, "Codex")
-	claudeAt := strings.Index(stdout, "Claude（已封存）")
-	if codexAt < 0 || claudeAt < 0 || codexAt > claudeAt {
+	claudeAt := strings.Index(stdout, "已封存")
+	if codexAt < 0 || claudeAt < 0 || codexAt > claudeAt || strings.Contains(stdout, "Claude（已封存）") {
 		t.Fatalf("expected the archived account to stay in the usage view, last, got: %s", stdout)
 	}
 }

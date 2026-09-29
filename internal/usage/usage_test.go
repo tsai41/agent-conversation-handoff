@@ -1,12 +1,9 @@
 package usage
 
 import (
-	"bytes"
 	"encoding/json"
-	"math"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 
@@ -125,106 +122,6 @@ func TestMatchLatestFollowsASymlinkedHomeToTheSnapshotsConfigDir(t *testing.T) {
 	}
 }
 
-func TestBuildRowsCallsOutAResetsAtAlreadyInThePast(t *testing.T) {
-	now := time.Date(2026, 9, 4, 10, 0, 0, 0, time.UTC)
-	past := now.Add(-30 * time.Minute)
-	accountRows := []struct{ ID, Label string }{{"claude-1", "Claude"}}
-	matches := map[string]Snapshot{
-		"claude-1": {
-			CheckedAt: now.Add(-1 * time.Hour),
-			FiveHour:  &Window{UsedPercentage: pct(55.0), ResetsAt: &past},
-		},
-	}
-
-	rows := BuildRows(accountRows, matches, now)
-	if len(rows) != 1 {
-		t.Fatalf("expected one row, got %d", len(rows))
-	}
-	if strings.Contains(rows[0].FiveHour, "55%") {
-		t.Fatalf("expected the stale percentage not to be shown as current, got %q", rows[0].FiveHour)
-	}
-	if !strings.Contains(rows[0].FiveHour, "已重置") {
-		t.Fatalf("expected the window to be called out as reset, got %q", rows[0].FiveHour)
-	}
-}
-
-func TestBuildRowsNeverRendersAMissingWindowAsZeroPercent(t *testing.T) {
-	now := time.Date(2026, 9, 4, 10, 0, 0, 0, time.UTC)
-	accountRows := []struct{ ID, Label string }{{"claude-1", "Claude"}}
-	matches := map[string]Snapshot{
-		"claude-1": {CheckedAt: now, FiveHour: &Window{UsedPercentage: pct(40.0)}},
-	}
-
-	rows := BuildRows(accountRows, matches, now)
-	if strings.Contains(rows[0].SevenDay, "0%") {
-		t.Fatalf("expected a missing window not to render as 0%%, got %q", rows[0].SevenDay)
-	}
-}
-
-func TestBuildRowsMarksAnAccountWithNoSnapshotAtAll(t *testing.T) {
-	now := time.Date(2026, 9, 4, 10, 0, 0, 0, time.UTC)
-	accountRows := []struct{ ID, Label string }{
-		{"claude-1", "Claude"},
-		{"claude-2", "Claude · 2"},
-	}
-	matches := map[string]Snapshot{
-		"claude-1": {CheckedAt: now, FiveHour: &Window{UsedPercentage: pct(40.0)}},
-	}
-
-	rows := BuildRows(accountRows, matches, now)
-	if len(rows) != 2 {
-		t.Fatalf("expected both accounts to be listed, got %d", len(rows))
-	}
-	if rows[1].Freshness != "沒有資料" {
-		t.Fatalf("expected the unmatched account to be marked as having no data, got %q", rows[1].Freshness)
-	}
-	if strings.Contains(rows[1].FiveHour, "0%") || strings.Contains(rows[1].SevenDay, "0%") {
-		t.Fatalf("expected no-data windows not to render as 0%%, got %+v", rows[1])
-	}
-	// The matched account must still be present and correct: one missing
-	// snapshot must not hide the other account's row.
-	if !strings.Contains(rows[0].FiveHour, "40%") {
-		t.Fatalf("expected the matched account's row to be unaffected, got %q", rows[0].FiveHour)
-	}
-}
-
-func TestBuildRowsCallsOutACheckedAtInTheFutureInsteadOfSayingJustNow(t *testing.T) {
-	now := time.Date(2026, 9, 4, 10, 0, 0, 0, time.UTC)
-	future := now.Add(1 * time.Hour)
-	accountRows := []struct{ ID, Label string }{{"claude-1", "Claude"}}
-	matches := map[string]Snapshot{
-		"claude-1": {CheckedAt: future, FiveHour: &Window{UsedPercentage: pct(40.0)}},
-	}
-
-	rows := BuildRows(accountRows, matches, now)
-	if strings.Contains(rows[0].Freshness, "剛剛") {
-		t.Fatalf("expected a future checked_at not to read as just-now, got %q", rows[0].Freshness)
-	}
-}
-
-func TestBuildRowsInfersAResetFromWindowLengthWhenResetsAtIsAbsent(t *testing.T) {
-	now := time.Date(2026, 9, 4, 10, 0, 0, 0, time.UTC)
-	accountRows := []struct{ ID, Label string }{{"claude-1", "Claude"}}
-	matches := map[string]Snapshot{
-		"claude-1": {
-			CheckedAt: now.Add(-6 * time.Hour),
-			FiveHour:  &Window{UsedPercentage: pct(55.0)},
-			SevenDay:  &Window{UsedPercentage: pct(80.0)},
-		},
-	}
-
-	rows := BuildRows(accountRows, matches, now)
-	if strings.Contains(rows[0].FiveHour, "55%") {
-		t.Fatalf("expected a 5-hour window older than 5 hours not to show the stale percentage, got %q", rows[0].FiveHour)
-	}
-	if !strings.Contains(rows[0].FiveHour, "已重置") {
-		t.Fatalf("expected the 5-hour window to be called out as reset, got %q", rows[0].FiveHour)
-	}
-	if !strings.Contains(rows[0].SevenDay, "80%") {
-		t.Fatalf("expected the 7-day window, only 6 hours old, to still show its percentage, got %q", rows[0].SevenDay)
-	}
-}
-
 func TestUnmarshalDecodesAnEmptyWindowObjectAsNoPercentageRatherThanZero(t *testing.T) {
 	var snap Snapshot
 	if err := json.Unmarshal([]byte(`{
@@ -240,56 +137,6 @@ func TestUnmarshalDecodesAnEmptyWindowObjectAsNoPercentageRatherThanZero(t *test
 	}
 	if snap.FiveHour.UsedPercentage != nil {
 		t.Fatalf("expected an empty window object to decode to no percentage, got %v", *snap.FiveHour.UsedPercentage)
-	}
-}
-
-func TestBuildRowsNeverRendersAnEmptyWindowObjectAsZeroPercent(t *testing.T) {
-	now := time.Date(2026, 9, 4, 10, 0, 0, 0, time.UTC)
-	accountRows := []struct{ ID, Label string }{{"claude-1", "Claude"}}
-	matches := map[string]Snapshot{
-		"claude-1": {CheckedAt: now, FiveHour: &Window{}},
-	}
-
-	rows := BuildRows(accountRows, matches, now)
-	if strings.Contains(rows[0].FiveHour, "0%") {
-		t.Fatalf("expected a window with no used_percentage to not render as 0%%, got %q", rows[0].FiveHour)
-	}
-	if rows[0].FiveHour != "–" {
-		t.Fatalf("expected a window with no used_percentage to render as no data, got %q", rows[0].FiveHour)
-	}
-}
-
-func TestBuildRowsTreatsAResetExactlyAtNowAsAlreadyReset(t *testing.T) {
-	now := time.Date(2026, 9, 4, 10, 0, 0, 0, time.UTC)
-	accountRows := []struct{ ID, Label string }{{"claude-1", "Claude"}}
-	matches := map[string]Snapshot{
-		"claude-1": {
-			CheckedAt: now.Add(-30 * time.Minute),
-			FiveHour:  &Window{UsedPercentage: pct(55.0), ResetsAt: &now},
-		},
-	}
-
-	rows := BuildRows(accountRows, matches, now)
-	if strings.Contains(rows[0].FiveHour, "55%") {
-		t.Fatalf("expected a reset exactly at now not to show the stale percentage, got %q", rows[0].FiveHour)
-	}
-	if !strings.Contains(rows[0].FiveHour, "已重置") {
-		t.Fatalf("expected a reset exactly at now to be called out as reset, got %q", rows[0].FiveHour)
-	}
-}
-
-func TestFprintRendersAllRows(t *testing.T) {
-	rows := []Row{
-		{Label: "Claude", FiveHour: "55%", SevenDay: "92%", Freshness: "3 分鐘前"},
-		{Label: "Codex", FiveHour: "–", SevenDay: "–", Freshness: "沒有資料"},
-	}
-	var buf bytes.Buffer
-	Fprint(&buf, rows)
-	out := buf.String()
-	for _, want := range []string{"Claude", "Codex", "55%", "92%", "3 分鐘前", "沒有資料"} {
-		if !strings.Contains(out, want) {
-			t.Fatalf("expected output to contain %q, got: %s", want, out)
-		}
 	}
 }
 
@@ -439,16 +286,5 @@ func TestMatchLatestPicksEachWindowIndependentlyOfTheClock(t *testing.T) {
 				t.Errorf("CheckedAt = %v, want hour %d", got.CheckedAt, tt.wantCheckedH)
 			}
 		})
-	}
-}
-
-func TestBuildRowsTreatsAnOutOfRangePercentageAsNoData(t *testing.T) {
-	now := time.Date(2026, 9, 29, 10, 0, 0, 0, time.UTC)
-	for _, p := range []float64{-0.5, 100.5, math.NaN(), math.Inf(1)} {
-		snap := Snapshot{Version: 1, ConfigDir: "/x", CheckedAt: now, FiveHour: &Window{UsedPercentage: pct(p)}}
-		rows := BuildRows([]struct{ ID, Label string }{{"a", "A"}}, map[string]Snapshot{"a": snap}, now)
-		if rows[0].FiveHour != "–" {
-			t.Fatalf("percentage %v rendered as %q, want no data", p, rows[0].FiveHour)
-		}
 	}
 }

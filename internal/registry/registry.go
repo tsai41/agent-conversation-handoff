@@ -530,6 +530,9 @@ func SuggestAccountHome(path string, provider string) (string, error) {
 	}
 }
 
+// ArchivedSuffix is appended to an archived account's label in every list.
+const ArchivedSuffix = "（已封存）"
+
 // Rows returns (account id, display label) pairs sorted by provider then
 // number with archived accounts last, appending the account number and alias
 // to the label when a provider has more than one registered account.
@@ -559,7 +562,7 @@ func Rows(r Registry) []struct{ ID, Label string } {
 			}
 		}
 		if account.Archived {
-			name += "（已封存）"
+			name += ArchivedSuffix
 		}
 		rows = append(rows, struct{ ID, Label string }{account.ID, name})
 	}

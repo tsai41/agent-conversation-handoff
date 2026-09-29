@@ -134,7 +134,7 @@ func TestRecordRoundTripsThroughBuildRows(t *testing.T) {
 	}
 	accounts := []registry.Account{{ID: "claude-1", Provider: "claude", Number: 1, Home: home}}
 	matches := MatchLatest(accounts, snaps)
-	rows := BuildRows([]struct{ ID, Label string }{{"claude-1", "Claude 1"}}, matches, now.Add(time.Minute))
+	rows := BuildRows(registry.Registry{Accounts: accounts}, matches, now.Add(time.Minute))
 	if len(rows) != 1 {
 		t.Fatalf("expected one row, got %d", len(rows))
 	}
