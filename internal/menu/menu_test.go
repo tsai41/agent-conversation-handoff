@@ -709,7 +709,7 @@ func TestHandoffUsesAnIDTypedIntoTheSearchBox(t *testing.T) {
 	if !strings.Contains(sessionArgv, "--print-query") {
 		t.Fatalf("expected the session picker to return its query, got argv: %s", sessionArgv)
 	}
-	if !strings.Contains(sessionArgv, "無法掃描：no Claude sessions for this project") || !strings.Contains(sessionArgv, "仍可輸入 ID 搜尋") {
+	if !strings.Contains(sessionArgv, "目前專案沒有對話，可直接輸入 ID") {
 		t.Fatalf("expected the scan failure in the picker header, got argv: %s", sessionArgv)
 	}
 	if rows := callFile(t, calls, "rows-2"); strings.Contains(rows, "輸入對話 ID") {
@@ -791,7 +791,7 @@ func TestHandoffPicksSourceThenConversationThenTarget(t *testing.T) {
 	if sources := callFile(t, calls, "rows-1"); !strings.Contains(sources, "1. Claude") {
 		t.Fatalf("expected a numbered source account level, got: %s", sources)
 	}
-	if sourceArgv := callFile(t, calls, "argv-1"); !strings.Contains(sourceArgv, "--header=主選單 > 接手對話 > 選擇來源 Agent") {
+	if sourceArgv := callFile(t, calls, "argv-1"); !strings.Contains(sourceArgv, "--header=主選單 > 接手對話 > 來源帳號") {
 		t.Fatalf("expected the source picker path bar in the picker, got argv: %s", sourceArgv)
 	}
 	rows := callFile(t, calls, "rows-2")
@@ -801,10 +801,10 @@ func TestHandoffPicksSourceThenConversationThenTarget(t *testing.T) {
 	if strings.Contains(rows, longUUID) {
 		t.Fatalf("full uuid leaked into session rows: %s", rows)
 	}
-	if sessionArgv := callFile(t, calls, "argv-2"); !strings.Contains(sessionArgv, "--header=主選單 > 接手對話 > 來源 Agent：Claude > 選擇來源對話（找到 1 筆，顯示最新 1 筆；其他對話可輸入 ID 搜尋）") {
+	if sessionArgv := callFile(t, calls, "argv-2"); !strings.Contains(sessionArgv, "--header=主選單 > 接手對話 > 來源帳號：Claude > 來源對話（1 筆；可輸入 ID 找其他對話）") {
 		t.Fatalf("expected the conversation count in the picker header, got argv: %s", sessionArgv)
 	}
-	if targetArgv := callFile(t, calls, "argv-3"); !strings.Contains(targetArgv, "--header=主選單 > 接手對話 > 來源 Agent：Claude > 選擇目標 Agent") {
+	if targetArgv := callFile(t, calls, "argv-3"); !strings.Contains(targetArgv, "--header=主選單 > 接手對話 > 來源帳號：Claude > 目標帳號") {
 		t.Fatalf("expected the target picker path bar in the picker, got argv: %s", targetArgv)
 	}
 	if strings.Contains(stdout, "主選單") {
@@ -1346,7 +1346,7 @@ func TestManageAccountsTrustWithOneClaudeAccountExplainsAndTouchesNothing(t *tes
 	if !strings.Contains(stdout, "沒有其他 Claude 帳號可以同步") {
 		t.Fatalf("expected an explanation that there is nothing to sync, got: %s", stdout)
 	}
-	if argv := callFile(t, calls, "argv-2"); !strings.Contains(argv, "--prompt=選擇動作: ") {
+	if argv := callFile(t, calls, "argv-2"); !strings.Contains(argv, "--prompt=選擇動作：") {
 		t.Fatalf("expected 帳號設定 to reopen without a source picker, got argv: %s", argv)
 	}
 	raw, err := os.ReadFile(filepath.Join(claudeHome, ".claude.json"))
@@ -1402,10 +1402,10 @@ func TestChatWithASingleUsableAccountSkipsTheAccountPicker(t *testing.T) {
 		t.Fatalf("menu run failed: %v\nstderr: %s", err, stderr)
 	}
 	argv := callFile(t, calls, "argv-1")
-	if !strings.Contains(argv, "--prompt=選擇對話方式: ") || !strings.Contains(argv, "主選單 > 使用帳號對話 > Claude") {
+	if !strings.Contains(argv, "--prompt=選擇對話方式：") || !strings.Contains(argv, "主選單 > 使用帳號對話 > Claude") {
 		t.Fatalf("expected the new-or-resume step naming the only account, got argv: %s", argv)
 	}
-	if argv := callFile(t, calls, "argv-2"); !strings.Contains(argv, "--prompt=選擇功能: ") {
+	if argv := callFile(t, calls, "argv-2"); !strings.Contains(argv, "--prompt=選擇功能：") {
 		t.Fatalf("expected ESC to return to the root menu, got argv: %s", argv)
 	}
 }
@@ -1706,7 +1706,7 @@ func TestHandoffWithAnUnmatchedTypedIDReopensTheSessionPicker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected a mistyped id not to end the run: %v\nstderr: %s", err, stderr)
 	}
-	if !strings.Contains(stdout, "提醒: no conversation matches id: zzzzzzzz") {
+	if !strings.Contains(stdout, "提醒：找不到 ID 為「zzzzzzzz」的對話。") {
 		t.Fatalf("expected the unmatched id to be reported, got: %s", stdout)
 	}
 	if argv := callFile(t, calls, "argv-3"); !strings.Contains(argv, crumbSession) {
@@ -1738,10 +1738,10 @@ func TestManageAccountsStaysOpenWhenAnActionFails(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected a failed write not to end the run: %v\nstderr: %s", err, stderr)
 	}
-	if !strings.Contains(stdout, "提醒: ") {
+	if !strings.Contains(stdout, "提醒：") {
 		t.Fatalf("expected the failure to be reported, got: %s", stdout)
 	}
-	if argv := callFile(t, calls, "argv-3"); !strings.Contains(argv, "--prompt=選擇動作: ") {
+	if argv := callFile(t, calls, "argv-3"); !strings.Contains(argv, "--prompt=選擇動作：") {
 		t.Fatalf("expected 帳號設定 to reopen after the failure, got argv: %s", argv)
 	}
 }
@@ -1768,9 +1768,9 @@ func TestChatEscStepsBackOneLevelAtATime(t *testing.T) {
 	}
 
 	want := []string{
-		"選擇功能: ", "選擇帳號: ", "選擇對話方式: ",
-		"選擇帳號: ", "選擇對話方式: ", "搜尋或輸入對話 ID: ",
-		"選擇對話方式: ", "選擇帳號: ", "選擇功能: ",
+		"選擇功能：", "選擇帳號：", "選擇對話方式：",
+		"選擇帳號：", "選擇對話方式：", "搜尋或輸入對話 ID：",
+		"選擇對話方式：", "選擇帳號：", "選擇功能：",
 	}
 	for i, prompt := range want {
 		if argv := callFile(t, calls, fmt.Sprintf("argv-%d", i)); !strings.Contains(argv, "--prompt="+prompt) {
@@ -1797,10 +1797,10 @@ func TestChatResumeWithAnUnmatchedTypedIDReopensTheSessionPicker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("expected a mistyped id not to end the run: %v\nstderr: %s", err, stderr)
 	}
-	if !strings.Contains(stdout, "提醒: no conversation matches id: zzzzzzzz") {
+	if !strings.Contains(stdout, "提醒：找不到 ID 為「zzzzzzzz」的對話。") {
 		t.Fatalf("expected the unmatched id to be reported, got: %s", stdout)
 	}
-	if argv := callFile(t, calls, "argv-4"); !strings.Contains(argv, "--prompt=搜尋或輸入對話 ID: ") {
+	if argv := callFile(t, calls, "argv-4"); !strings.Contains(argv, "--prompt=搜尋或輸入對話 ID：") {
 		t.Fatalf("expected the session picker to reopen, got argv: %s", argv)
 	}
 }
@@ -1855,5 +1855,28 @@ func TestRenamingAnAccountReportsTheResult(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "已更新「Claude」的 alias。") {
 		t.Fatalf("expected the rename to be reported, got: %s", stdout)
+	}
+}
+
+func TestSessionListCrumbKeepsTheTypedIDHintShort(t *testing.T) {
+	three := make([]session.Candidate, 3)
+	tests := []struct {
+		name    string
+		listing session.CandidateList
+		err     error
+		want    string
+	}{
+		{"no sessions directory", session.CandidateList{}, fmt.Errorf("%w: /x", session.ErrNoSessions), "P（目前專案沒有對話，可直接輸入 ID）"},
+		{"empty listing", session.CandidateList{}, nil, "P（目前專案沒有對話，可直接輸入 ID）"},
+		{"read failure", session.CandidateList{}, fmt.Errorf("boom"), "P（可直接輸入 ID；無法讀取對話：boom）"},
+		{"all shown", session.CandidateList{Candidates: three, Total: 3}, nil, "P（3 筆；可輸入 ID 找其他對話）"},
+		{"truncated", session.CandidateList{Candidates: three, Total: 40}, nil, "P（40 筆，顯示最新 3 筆；可輸入 ID 找其他對話）"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := sessionListCrumb("P", tt.listing, tt.err); got != tt.want {
+				t.Fatalf("got %q, want %q", got, tt.want)
+			}
+		})
 	}
 }

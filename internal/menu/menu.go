@@ -33,10 +33,35 @@ var errCancelled = errors.New("selection cancelled")
 // ending.
 var errNoMatch = errors.New("no conversation matches id")
 
+// noMatchError is errNoMatch with the id that was typed, and the accounts
+// that could not be searched, so the menu can say both in its own words.
+type noMatchError struct {
+	id         string
+	unsearched []string
+}
+
+func (e *noMatchError) Error() string {
+	if len(e.unsearched) > 0 {
+		return fmt.Sprintf("no conversation matches id %s; some accounts could not be searched (%s)", e.id, strings.Join(e.unsearched, "; "))
+	}
+	return fmt.Sprintf("no conversation matches id: %s", e.id)
+}
+
+func (e *noMatchError) Is(target error) bool { return target == errNoMatch }
+
 // warn reports a failed action the user can correct and retry from the same
 // menu, which stays open.
 func warn(err error) {
-	fmt.Printf("提醒: %v\n", err)
+	var noMatch *noMatchError
+	if errors.As(err, &noMatch) {
+		msg := fmt.Sprintf("找不到 ID 為「%s」的對話", noMatch.id)
+		if len(noMatch.unsearched) > 0 {
+			msg += fmt.Sprintf("（無法搜尋：%s）", strings.Join(noMatch.unsearched, "；"))
+		}
+		fmt.Printf("提醒：%s。\n", msg)
+		return
+	}
+	fmt.Printf("提醒：%v\n", err)
 }
 
 // Breadcrumb segments for the levels below the root. Each level is named
@@ -46,9 +71,9 @@ const (
 	crumbChat     = "使用帳號對話"
 	crumbResume   = "繼續既有對話"
 	crumbHandoff  = "接手對話"
-	crumbSource   = "選擇來源 Agent"
-	crumbSession  = "選擇來源對話"
-	crumbTarget   = "選擇目標 Agent"
+	crumbSource   = "來源帳號"
+	crumbSession  = "來源對話"
+	crumbTarget   = "目標帳號"
 	crumbAccounts = "帳號設定"
 	crumbSetup    = "初次設定"
 	crumbUsage    = "查看用量"
@@ -58,12 +83,24 @@ func breadcrumb(segments ...string) string {
 	return strings.Join(append([]string{rootCrumb}, segments...), " > ")
 }
 
-func sourceAgentCrumb(label string) string {
-	return "來源 Agent：" + label
+func sourceAccountCrumb(label string) string {
+	return "來源帳號：" + label
 }
 
-func sessionCountCrumb(crumbs string, total, displayed int) string {
-	return fmt.Sprintf("%s（找到 %d 筆，顯示最新 %d 筆；其他對話可輸入 ID 搜尋）", crumbs, total, displayed)
+// sessionListCrumb appends what the conversation picker below it holds. It
+// stays short because fzf cuts the path bar at the terminal width, and the
+// part that must survive is that an id can still be typed.
+func sessionListCrumb(crumbs string, listing session.CandidateList, err error) string {
+	switch {
+	case errors.Is(err, session.ErrNoSessions), err == nil && listing.Total == 0:
+		return crumbs + "（目前專案沒有對話，可直接輸入 ID）"
+	case err != nil:
+		return fmt.Sprintf("%s（可直接輸入 ID；無法讀取對話：%v）", crumbs, err)
+	case listing.Total > len(listing.Candidates):
+		return fmt.Sprintf("%s（%d 筆，顯示最新 %d 筆；可輸入 ID 找其他對話）", crumbs, listing.Total, len(listing.Candidates))
+	default:
+		return fmt.Sprintf("%s（%d 筆；可輸入 ID 找其他對話）", crumbs, listing.Total)
+	}
 }
 
 // showCrumbs prints the path bar above a non-picker screen whose explanatory
@@ -223,7 +260,7 @@ func readLine(crumbs, prompt string) (string, error) {
 
 func readOptionalAlias(crumbs, prompt string) (string, error) {
 	if prompt == "" {
-		prompt = "alias（選填）: "
+		prompt = "alias（選填）："
 	}
 	return readLine(crumbs, prompt)
 }
@@ -308,7 +345,7 @@ func chooseSourceAccount(r registry.Registry, labels map[string]string) (string,
 	if len(candidates) == 0 {
 		return "", fmt.Errorf("no account is registered")
 	}
-	return pickKey(candidates, breadcrumb(crumbHandoff, crumbSource), "來源帳號: ", true)
+	return pickKey(candidates, breadcrumb(crumbHandoff, crumbSource), "選擇來源帳號：", true)
 }
 
 // interactiveRegistryHandoff is a three-step wizard (source agent ->
@@ -329,9 +366,8 @@ func interactiveRegistryHandoff(registryPath, project string) error {
 	)
 	step := stepSource
 	var sourceID string
-	var sessions []session.Candidate
-	var sessionTotal int
-	var sessionScanErr error
+	var listing session.CandidateList
+	var listErr error
 	var sourceCrumb, sessionPath, typed string
 
 	for {
@@ -347,27 +383,16 @@ func interactiveRegistryHandoff(registryPath, project string) error {
 			}
 			// A source account whose conversations cannot be listed is not a
 			// dead end: a typed id still reaches every account.
-			listing, listErr := sessionsForAccount(source, project)
+			listing, listErr = sessionsForAccount(source, project)
 			if listErr != nil {
-				sessions = nil
-				sessionTotal = 0
-				sessionScanErr = listErr
-			} else {
-				sessions = listing.Candidates
-				sessionTotal = listing.Total
-				sessionScanErr = nil
+				listing = session.CandidateList{}
 			}
-			sourceCrumb = sourceAgentCrumb(labels[sourceID])
+			sourceCrumb = sourceAccountCrumb(labels[sourceID])
 			step = stepSession
 
 		case stepSession:
-			crumbs := breadcrumb(crumbHandoff, sourceCrumb, crumbSession)
-			if sessionScanErr != nil {
-				crumbs = fmt.Sprintf("%s（無法掃描：%v；仍可輸入 ID 搜尋）", crumbs, sessionScanErr)
-			} else {
-				crumbs = sessionCountCrumb(crumbs, sessionTotal, len(sessions))
-			}
-			sessionPath, typed, err = pickSession(sessions, crumbs, "搜尋或輸入對話 ID: ")
+			crumbs := sessionListCrumb(breadcrumb(crumbHandoff, sourceCrumb, crumbSession), listing, listErr)
+			sessionPath, typed, err = pickSession(listing.Candidates, crumbs, "搜尋或輸入對話 ID：")
 			if err != nil {
 				if errors.Is(err, errCancelled) {
 					step = stepSource
@@ -451,7 +476,7 @@ func QuickHandoff(registryPath, fragment, project string) error {
 			}
 			byPath[h.match.Path] = h
 		}
-		path, pickErr := pickSessionRow(candidates, breadcrumb(crumbHandoff), "多筆符合，選擇要接力的對話: ")
+		path, pickErr := pickSessionRow(candidates, breadcrumb(crumbHandoff), "多筆符合，選擇要接手的對話：")
 		if pickErr != nil {
 			return pickErr
 		}
@@ -474,7 +499,7 @@ func chooseCodexTarget(r registry.Registry, labels map[string]string) (string, e
 	if len(candidates) == 1 {
 		return candidates[0].Key, nil
 	}
-	return pickKey(candidates, breadcrumb(crumbHandoff), "選擇接手的 Codex 帳號: ", true)
+	return pickKey(candidates, breadcrumb(crumbHandoff), "選擇目標 Codex 帳號：", true)
 }
 
 // manualIDHandoff resolves a conversation id typed by the user against every
@@ -503,7 +528,7 @@ func manualIDHandoff(registryPath string, r registry.Registry, labels map[string
 			// Keep searching the other accounts, but remember why this one
 			// produced nothing: "not found" and "could not look" must not
 			// reach the user as the same message.
-			lookupErrors = append(lookupErrors, fmt.Sprintf("%s: %s", labels[account.ID], err))
+			lookupErrors = append(lookupErrors, fmt.Sprintf("%s：%s", labels[account.ID], err))
 			continue
 		}
 		for _, match := range matches {
@@ -512,9 +537,9 @@ func manualIDHandoff(registryPath string, r registry.Registry, labels map[string
 	}
 	if len(hits) == 0 {
 		if len(lookupErrors) > 0 {
-			return fmt.Errorf("%w %s; some accounts could not be searched (%s)", errNoMatch, fragment, strings.Join(lookupErrors, "; "))
+			return &noMatchError{id: fragment, unsearched: lookupErrors}
 		}
-		return fmt.Errorf("%w: %s", errNoMatch, fragment)
+		return &noMatchError{id: fragment}
 	}
 
 	chosen := hits[0]
@@ -526,7 +551,7 @@ func manualIDHandoff(registryPath string, r registry.Registry, labels map[string
 			candidates[i] = session.Candidate{Path: h.match.Path, Description: fmt.Sprintf("%s  %s  %s", labels[h.accountID], h.match.Description, h.match.CWD)}
 			byPath[h.match.Path] = h
 		}
-		path, err := pickSessionRow(candidates, breadcrumb(crumbHandoff), "多筆符合，選擇要接力的對話: ")
+		path, err := pickSessionRow(candidates, breadcrumb(crumbHandoff), "多筆符合，選擇要接手的對話：")
 		if err != nil {
 			return err
 		}
@@ -534,7 +559,7 @@ func manualIDHandoff(registryPath string, r registry.Registry, labels map[string
 	}
 
 	sourceID := chosen.accountID
-	targetID, err := chooseTargetExcluding(r, labels, sourceID, breadcrumb(crumbHandoff, sourceAgentCrumb(labels[sourceID]), crumbTarget))
+	targetID, err := chooseTargetExcluding(r, labels, sourceID, breadcrumb(crumbHandoff, sourceAccountCrumb(labels[sourceID]), crumbTarget))
 	if err != nil {
 		return err
 	}
@@ -544,7 +569,7 @@ func manualIDHandoff(registryPath string, r registry.Registry, labels map[string
 func finishManualHandoff(registryPath, sourceID, targetID string, labels map[string]string, match session.Match, project string) error {
 	// The direction picked before the id was typed may not be the direction
 	// being used: the source account is wherever the id turned up.
-	fmt.Printf("接力方向：「%s」→「%s」\n", labels[sourceID], labels[targetID])
+	fmt.Printf("接手方向：「%s」→「%s」\n", labels[sourceID], labels[targetID])
 	if match.CWD != "" {
 		if resolved := resolvePath(project); match.CWD != resolved {
 			fmt.Printf("注意：這個對話原本在 %s 進行，交接資料會建立在 %s。\n", match.CWD, resolved)
@@ -576,7 +601,7 @@ func chooseTargetExcluding(r registry.Registry, labels map[string]string, source
 	if len(candidates) == 0 {
 		return "", fmt.Errorf("no different target account is available")
 	}
-	return pickKey(candidates, crumbs, "接手帳號: ", true)
+	return pickKey(candidates, crumbs, "選擇目標帳號：", true)
 }
 
 func bootstrapRegistry(registryPath string) error {
@@ -589,14 +614,14 @@ func bootstrapRegistry(registryPath string) error {
 	for _, candidate := range candidates {
 		providerName := registry.ProviderNames[candidate.Provider]
 		choice, err := pickKey([]kv{
-			{"import", fmt.Sprintf("匯入 %s: %s", providerName, candidate.Home)},
+			{"import", fmt.Sprintf("匯入 %s：%s", providerName, candidate.Home)},
 			{"skip", "略過這個目錄"},
-		}, crumbs, "偵測到既有帳號目錄: ", true)
+		}, crumbs, "偵測到既有帳號目錄：", true)
 		if err != nil {
 			return err
 		}
 		if choice == "import" {
-			alias, err := readOptionalAlias(crumbs, fmt.Sprintf("%s alias（選填）: ", providerName))
+			alias, err := readOptionalAlias(crumbs, fmt.Sprintf("%s alias（選填）：", providerName))
 			if err != nil {
 				if errors.Is(err, errCancelled) {
 					continue
@@ -642,13 +667,13 @@ func offerSharedSettings(r registry.Registry, account registry.Account, crumbs s
 	choice, err := pickKey([]kv{
 		{"share", fmt.Sprintf("共用「%s」的設定", labels[source.ID])},
 		{"own", "這個帳號自己一份設定"},
-	}, crumbs, "新帳號的設定: ", true)
+	}, crumbs, "新帳號的設定：", true)
 	if err != nil || choice != "share" {
 		return
 	}
 	shares, err := registry.ShareSettings(source, account, false)
 	if err != nil {
-		fmt.Printf("提醒: 未能共用「%s」的設定: %s\n", labels[source.ID], err)
+		fmt.Printf("提醒：未能共用「%s」的設定：%s\n", labels[source.ID], err)
 		return
 	}
 	var linked, already, failed int
@@ -662,7 +687,7 @@ func offerSharedSettings(r registry.Registry, account registry.Account, crumbs s
 			fmt.Printf("%s 原本的版本已備份到 %s\n", share.Name, share.Backup)
 		}
 		if share.Err != nil {
-			fmt.Printf("提醒: 未能共用 %s: %s\n", share.Name, share.Err)
+			fmt.Printf("提醒：未能共用 %s：%s\n", share.Name, share.Err)
 			failed++
 			continue
 		}
@@ -701,7 +726,7 @@ func shareAllAccountSettings(r registry.Registry) {
 		candidates++
 		shares, err := registry.ShareSettings(source, account, true)
 		if err != nil {
-			fmt.Printf("%s: 未共用: %s\n", labels[account.ID], err)
+			fmt.Printf("%s：未共用：%s\n", labels[account.ID], err)
 			reported = true
 			continue
 		}
@@ -713,16 +738,16 @@ func shareAllAccountSettings(r registry.Registry) {
 			// Named before the error is handled: an entry moved aside by a
 			// share that then failed is exactly the one nobody must lose.
 			if share.Backup != "" {
-				fmt.Printf("%s: %s 原本的版本已備份到 %s\n", labels[account.ID], share.Name, share.Backup)
+				fmt.Printf("%s：%s 原本的版本已備份到 %s\n", labels[account.ID], share.Name, share.Backup)
 				reported = true
 			}
 			if share.Err != nil {
-				fmt.Printf("%s: %s 未共用: %s\n", labels[account.ID], share.Name, share.Err)
+				fmt.Printf("%s：%s 未共用：%s\n", labels[account.ID], share.Name, share.Err)
 				reported = true
 				continue
 			}
 			if share.Linked {
-				fmt.Printf("%s: %s 已改為共用「%s」的版本\n", labels[account.ID], share.Name, labels[source.ID])
+				fmt.Printf("%s：%s 已改為共用「%s」的版本\n", labels[account.ID], share.Name, labels[source.ID])
 				reported = true
 			}
 		}
@@ -751,11 +776,11 @@ func manageAccounts(registryPath string) error {
 			{"rename", "修改 alias"},
 			{"archive", "封存／解除封存帳號"},
 			{"remove", "從 ach 移除帳號"},
-			{"share", "共用設定到所有帳號"},
+			{"share", "讓所有帳號共用設定"},
 			{"trust", "同步專案信任到其他帳號"},
 			{"usage-dir", "設定用量資料目錄"},
 		}
-		action, err := pickKey(actions, crumbs, "選擇動作: ", true)
+		action, err := pickKey(actions, crumbs, "選擇動作：", true)
 		if err != nil {
 			if errors.Is(err, errCancelled) {
 				return nil
@@ -772,10 +797,10 @@ func manageAccounts(registryPath string) error {
 				}
 			}
 			if len(providers) == 0 {
-				warn(fmt.Errorf("no provider CLI is installed"))
+				fmt.Println("提醒：沒有安裝 claude 或 codex CLI，無法新增帳號。")
 				continue
 			}
-			chosenProvider, err := pickKey(providers, actionCrumbs, "選擇 provider: ", true)
+			chosenProvider, err := pickKey(providers, actionCrumbs, "選擇 provider：", true)
 			if err != nil {
 				if errors.Is(err, errCancelled) {
 					continue
@@ -787,9 +812,9 @@ func manageAccounts(registryPath string) error {
 				return err
 			}
 			confirmation, err := pickKey([]kv{
-				{"confirm", fmt.Sprintf("建立帳號目錄: %s", accountHome)},
+				{"confirm", fmt.Sprintf("建立帳號目錄：%s", accountHome)},
 				{"cancel", "取消"},
-			}, actionCrumbs, "確認新增帳號: ", true)
+			}, actionCrumbs, "確認新增帳號：", true)
 			if err != nil {
 				if errors.Is(err, errCancelled) {
 					continue
@@ -830,7 +855,7 @@ func manageAccounts(registryPath string) error {
 			confirmation, err := pickKey([]kv{
 				{"cancel", "取消"},
 				{"confirm", "每個帳號都改讀第一個同 provider 帳號的設定檔"},
-			}, actionCrumbs, "確認共用設定: ", true)
+			}, actionCrumbs, "確認共用設定：", true)
 			if err != nil {
 				if errors.Is(err, errCancelled) {
 					continue
@@ -845,14 +870,14 @@ func manageAccounts(registryPath string) error {
 			if err != nil {
 				return err
 			}
-			accountID, err := chooseRegisteredAccount(r, actionCrumbs, "選擇要修改 alias 的帳號: ")
+			accountID, err := chooseRegisteredAccount(r, actionCrumbs, "選擇要修改 alias 的帳號：")
 			if err != nil {
 				if errors.Is(err, errCancelled) {
 					continue
 				}
 				return err
 			}
-			alias, err := readOptionalAlias(actionCrumbs, "新的 alias（留空即清除）: ")
+			alias, err := readOptionalAlias(actionCrumbs, "新的 alias（留空即清除）：")
 			if err != nil {
 				if errors.Is(err, errCancelled) {
 					continue
@@ -869,7 +894,7 @@ func manageAccounts(registryPath string) error {
 			if err != nil {
 				return err
 			}
-			accountID, err := chooseRegisteredAccount(r, actionCrumbs, "選擇要登入的帳號: ")
+			accountID, err := chooseRegisteredAccount(r, actionCrumbs, "選擇要登入的帳號：")
 			if err != nil {
 				if errors.Is(err, errCancelled) {
 					continue
@@ -892,9 +917,9 @@ func manageAccounts(registryPath string) error {
 			}
 			options := make([]kv, len(candidates))
 			for i, c := range candidates {
-				options[i] = kv{c.Provider + "|" + c.Home, fmt.Sprintf("%s: %s", registry.ProviderNames[c.Provider], c.Home)}
+				options[i] = kv{c.Provider + "|" + c.Home, fmt.Sprintf("%s：%s", registry.ProviderNames[c.Provider], c.Home)}
 			}
-			selected, err := pickKey(options, actionCrumbs, "選擇要匯入的帳號目錄: ", true)
+			selected, err := pickKey(options, actionCrumbs, "選擇要匯入的帳號目錄：", true)
 			if err != nil {
 				if errors.Is(err, errCancelled) {
 					continue
@@ -924,7 +949,7 @@ func manageAccounts(registryPath string) error {
 			if err != nil {
 				return err
 			}
-			accountID, err := chooseRegisteredAccount(r, actionCrumbs, "選擇要封存或解除封存的帳號: ")
+			accountID, err := chooseRegisteredAccount(r, actionCrumbs, "選擇要封存或解除封存的帳號：")
 			if err != nil {
 				if errors.Is(err, errCancelled) {
 					continue
@@ -950,7 +975,7 @@ func manageAccounts(registryPath string) error {
 			if err != nil {
 				return err
 			}
-			accountID, err := chooseRegisteredAccount(r, actionCrumbs, "選擇要取消登記的帳號: ")
+			accountID, err := chooseRegisteredAccount(r, actionCrumbs, "選擇要移除的帳號：")
 			if err != nil {
 				if errors.Is(err, errCancelled) {
 					continue
@@ -965,7 +990,7 @@ func manageAccounts(registryPath string) error {
 			confirmation, err := pickKey([]kv{
 				{"cancel", "取消"},
 				{"confirm", fmt.Sprintf("只從 ach 移除「%s」，保留所有帳號資料", label)},
-			}, actionCrumbs, "確認取消登記: ", true)
+			}, actionCrumbs, "確認移除帳號：", true)
 			if err != nil {
 				if errors.Is(err, errCancelled) {
 					continue
@@ -980,7 +1005,7 @@ func manageAccounts(registryPath string) error {
 				fmt.Printf("已移除「%s」，帳號資料保留在 %s。\n", label, account.Home)
 			}
 		case "usage-dir":
-			input, err := readOptionalAlias(actionCrumbs, "新的用量資料目錄（留空即清除，改用預設路徑）: ")
+			input, err := readOptionalAlias(actionCrumbs, "新的用量資料目錄（留空即清除，改用預設路徑）：")
 			if err != nil {
 				if errors.Is(err, errCancelled) {
 					continue
@@ -1026,7 +1051,7 @@ func manageTrustSync(registryPath, crumbs string) error {
 		fmt.Println("沒有其他 Claude 帳號可以同步：專案信任只存在 Claude 帳號裡，至少要有兩個。")
 		return nil
 	}
-	sourceID, err := pickKey(candidates, crumbs, "選擇來源 Claude 帳號: ", true)
+	sourceID, err := pickKey(candidates, crumbs, "選擇來源 Claude 帳號：", true)
 	if err != nil {
 		return err
 	}
@@ -1040,7 +1065,7 @@ func manageTrustSync(registryPath, crumbs string) error {
 	confirmation, err := pickKey([]kv{
 		{"confirm", fmt.Sprintf("將「%s」的專案信任同步到其他帳號", labels[source.ID])},
 		{"cancel", "取消"},
-	}, crumbs, "確認同步專案信任: ", true)
+	}, crumbs, "確認同步專案信任：", true)
 	if err != nil {
 		return err
 	}
@@ -1065,17 +1090,17 @@ func manageTrustSync(registryPath, crumbs string) error {
 func reportTrustSync(label string, result registry.TrustSync) {
 	if result.Err != nil {
 		if result.Backup != "" {
-			fmt.Printf("%s: 同步失敗（%v），原設定已備份到 %s\n", label, result.Err, result.Backup)
+			fmt.Printf("%s：同步失敗（%v），原設定已備份到 %s\n", label, result.Err, result.Backup)
 		} else {
-			fmt.Printf("%s: 同步失敗（%v）\n", label, result.Err)
+			fmt.Printf("%s：同步失敗（%v）\n", label, result.Err)
 		}
 		return
 	}
 	if result.Skipped != "" {
-		fmt.Printf("%s: 未同步（%s）\n", label, result.Skipped)
+		fmt.Printf("%s：未同步（%s）\n", label, result.Skipped)
 		return
 	}
-	fmt.Printf("%s: 已補上 %d 個專案、%d 個欄位，原設定已備份到 %s\n", label, result.ProjectsAdded, result.FieldsFilled, result.Backup)
+	fmt.Printf("%s：已補上 %d 個專案、%d 個欄位，原設定已備份到 %s\n", label, result.ProjectsAdded, result.FieldsFilled, result.Backup)
 }
 
 // launchAccount is the chat flow: account -> new or resume -> conversation.
@@ -1120,7 +1145,7 @@ func launchAccount(registryPath string) error {
 	for {
 		switch step {
 		case stepAccount:
-			selected, err := pickKey(candidates, breadcrumb(crumbChat), "選擇帳號: ", true)
+			selected, err := pickKey(candidates, breadcrumb(crumbChat), "選擇帳號：", true)
 			if err != nil {
 				return err
 			}
@@ -1139,7 +1164,7 @@ func launchAccount(registryPath string) error {
 			action, err := pickKey([]kv{
 				{"new", "新開對話"},
 				{"resume", crumbResume},
-			}, modeCrumbs, "選擇對話方式: ", true)
+			}, modeCrumbs, "選擇對話方式：", true)
 			if err != nil {
 				if errors.Is(err, errCancelled) && !single {
 					step = stepAccount
@@ -1178,14 +1203,11 @@ func resumeAccountSession(account registry.Account) error {
 		// A project with no conversations of its own is not a dead end: a
 		// typed id still reaches every project.
 		listing, listErr := sessionsForAccount(account, project)
-		crumbs := breadcrumb(crumbChat, crumbResume)
 		if listErr != nil {
 			listing = session.CandidateList{}
-			crumbs = fmt.Sprintf("%s（無法掃描：%v；仍可輸入 ID 搜尋）", crumbs, listErr)
-		} else {
-			crumbs = sessionCountCrumb(crumbs, listing.Total, len(listing.Candidates))
 		}
-		path, typed, err := pickSession(listing.Candidates, crumbs, "搜尋或輸入對話 ID: ")
+		crumbs := sessionListCrumb(breadcrumb(crumbChat, crumbResume), listing, listErr)
+		path, typed, err := pickSession(listing.Candidates, crumbs, "搜尋或輸入對話 ID：")
 		if err != nil {
 			return err
 		}
@@ -1202,7 +1224,7 @@ func resumeAccountSession(account registry.Account) error {
 			return err
 		}
 		if len(matches) == 0 {
-			warn(fmt.Errorf("%w: %s", errNoMatch, typed))
+			warn(&noMatchError{id: typed})
 			continue
 		}
 		if len(matches) == 1 {
@@ -1212,7 +1234,7 @@ func resumeAccountSession(account registry.Account) error {
 		for i, match := range matches {
 			resumeCandidates[i] = match.Candidate
 		}
-		path, err = pickSessionRow(resumeCandidates, breadcrumb(crumbChat, crumbResume), "多筆符合，選擇要繼續的對話: ")
+		path, err = pickSessionRow(resumeCandidates, breadcrumb(crumbChat, crumbResume), "多筆符合，選擇要繼續的對話：")
 		if err != nil {
 			if errors.Is(err, errCancelled) {
 				continue
@@ -1309,7 +1331,7 @@ func Run(registryPath, usageDirFlag string, usageDirFlagExplicit bool) error {
 			{"handoff", crumbHandoff},
 			{"accounts", crumbAccounts},
 			{"usage", crumbUsage},
-		}, breadcrumb(), "選擇功能: ", true)
+		}, breadcrumb(), "選擇功能：", true)
 		if err != nil {
 			if errors.Is(err, errCancelled) {
 				return nil

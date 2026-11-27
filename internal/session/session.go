@@ -5,6 +5,7 @@ package session
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -15,6 +16,10 @@ import (
 
 	"github.com/tsai41/agent-conversation-handoff/internal/jsonlutil"
 )
+
+// ErrNoSessions marks an account that has no conversations to list for the
+// project, as opposed to one whose conversations could not be read.
+var ErrNoSessions = errors.New("no sessions")
 
 type Candidate struct {
 	Path        string
@@ -132,7 +137,7 @@ func ClaudeCandidates(sourceHome, project string) ([]Candidate, error) {
 	sessionDir := filepath.Join(sourceHome, "projects", projectID)
 	info, err := os.Stat(sessionDir)
 	if err != nil || !info.IsDir() {
-		return nil, fmt.Errorf("no Claude sessions for this project: %s", sessionDir)
+		return nil, fmt.Errorf("%w: no Claude sessions for this project: %s", ErrNoSessions, sessionDir)
 	}
 
 	matches, err := claudeSessionPaths(sessionDir)
@@ -351,7 +356,7 @@ func CodexCandidates(codexHome, project string) ([]Candidate, error) {
 	sessionsDir := filepath.Join(codexHome, "sessions")
 	info, err := os.Stat(sessionsDir)
 	if err != nil || !info.IsDir() {
-		return nil, fmt.Errorf("no Codex sessions directory: %s", sessionsDir)
+		return nil, fmt.Errorf("%w: no Codex sessions directory: %s", ErrNoSessions, sessionsDir)
 	}
 	resolvedProject, err := filepath.Abs(project)
 	if err != nil {
