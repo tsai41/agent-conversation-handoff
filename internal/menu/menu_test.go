@@ -1604,3 +1604,38 @@ func TestHandoffSourcePickerOrdersByAccountNumber(t *testing.T) {
 		t.Fatalf("source order = %v, want %v", got, want)
 	}
 }
+
+func TestEveryAccountPickerListsAccountsInTheSameOrder(t *testing.T) {
+	home := t.TempDir()
+	fakeBin := runWithFakePath(t, home)
+	writeScript(t, filepath.Join(fakeBin, "claude"), "#!/usr/bin/env bash\nexit 0\n")
+	writeScript(t, filepath.Join(fakeBin, "codex"), "#!/usr/bin/env bash\nexit 0\n")
+	calls := fakeFzf(t, home, key("claude-1"), key("claude-1"), key("claude-1"))
+	r := registry.Registry{Accounts: []registry.Account{
+		{ID: "claude-1", Provider: "claude", Number: 1},
+		{ID: "codex-1", Provider: "codex", Number: 1},
+		{ID: "claude-2", Provider: "claude", Number: 2},
+	}}
+	labels := accountLabels(r)
+
+	if _, err := chooseSourceAccount(r, labels); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := chooseTargetExcluding(r, labels, "", ""); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := chooseRegisteredAccount(r, "", ""); err != nil {
+		t.Fatal(err)
+	}
+
+	want := "claude-1 claude-2 codex-1"
+	for _, name := range []string{"rows-0", "rows-1", "rows-2"} {
+		var got []string
+		for _, line := range strings.Split(strings.TrimSpace(callFile(t, calls, name)), "\n") {
+			got = append(got, strings.SplitN(line, "\t", 2)[0])
+		}
+		if strings.Join(got, " ") != want {
+			t.Fatalf("%s order = %v, want %s", name, got, want)
+		}
+	}
+}

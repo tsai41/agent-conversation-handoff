@@ -248,16 +248,16 @@ func idsOf(accounts []Account) []string {
 	return ids
 }
 
-func TestDisplayOrderMovesArchivedToTheEndKeepingRegistryOrder(t *testing.T) {
+func TestDisplayOrderPutsArchivedLastThenSortsByProviderAndNumber(t *testing.T) {
 	tests := []struct {
 		name     string
 		archived map[string]bool
 		want     []string
 	}{
-		{"none archived", nil, []string{"claude-1", "codex-1", "claude-2"}},
-		{"mixed", map[string]bool{"claude-1": true}, []string{"codex-1", "claude-2", "claude-1"}},
-		{"mixed keeps relative order", map[string]bool{"claude-1": true, "codex-1": true}, []string{"claude-2", "claude-1", "codex-1"}},
-		{"all archived", map[string]bool{"claude-1": true, "codex-1": true, "claude-2": true}, []string{"claude-1", "codex-1", "claude-2"}},
+		{"none archived", nil, []string{"claude-1", "claude-2", "codex-1"}},
+		{"mixed", map[string]bool{"claude-1": true}, []string{"claude-2", "codex-1", "claude-1"}},
+		{"archived sorted among themselves", map[string]bool{"claude-1": true, "codex-1": true}, []string{"claude-2", "claude-1", "codex-1"}},
+		{"all archived", map[string]bool{"claude-1": true, "codex-1": true, "claude-2": true}, []string{"claude-1", "claude-2", "codex-1"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

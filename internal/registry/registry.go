@@ -382,13 +382,21 @@ func ToggleArchived(path string, accountID string) (bool, error) {
 	return archived, err
 }
 
-// DisplayOrder returns a copy of the accounts in the order shown to the
-// user: registry order kept, archived accounts moved to the end.
+// DisplayOrder returns a copy of the accounts in the order every list shows
+// them: archived accounts last, then by provider, then by account number.
+// One order everywhere keeps a digit shortcut on the same account from one
+// picker to the next.
 func DisplayOrder(r Registry) []Account {
 	ordered := make([]Account, len(r.Accounts))
 	copy(ordered, r.Accounts)
 	sort.SliceStable(ordered, func(i, j int) bool {
-		return !ordered[i].Archived && ordered[j].Archived
+		if ordered[i].Archived != ordered[j].Archived {
+			return !ordered[i].Archived
+		}
+		if ordered[i].Provider != ordered[j].Provider {
+			return ordered[i].Provider < ordered[j].Provider
+		}
+		return ordered[i].Number < ordered[j].Number
 	})
 	return ordered
 }
@@ -533,25 +541,15 @@ func SuggestAccountHome(path string, provider string) (string, error) {
 // ArchivedSuffix is appended to an archived account's label in every list.
 const ArchivedSuffix = "（已封存）"
 
-// Rows returns (account id, display label) pairs sorted by provider then
-// number with archived accounts last, appending the account number and alias
-// to the label when a provider has more than one registered account.
+// Rows returns (account id, display label) pairs in DisplayOrder, appending
+// the account number and alias to the label when a provider has more than
+// one registered account.
 func Rows(r Registry) []struct{ ID, Label string } {
 	counts := map[string]int{}
 	for _, account := range r.Accounts {
 		counts[account.Provider]++
 	}
-	sorted := make([]Account, len(r.Accounts))
-	copy(sorted, r.Accounts)
-	sort.Slice(sorted, func(i, j int) bool {
-		if sorted[i].Archived != sorted[j].Archived {
-			return !sorted[i].Archived
-		}
-		if sorted[i].Provider != sorted[j].Provider {
-			return sorted[i].Provider < sorted[j].Provider
-		}
-		return sorted[i].Number < sorted[j].Number
-	})
+	sorted := DisplayOrder(r)
 	rows := make([]struct{ ID, Label string }, 0, len(sorted))
 	for _, account := range sorted {
 		name := ProviderNames[account.Provider]
