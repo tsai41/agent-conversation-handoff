@@ -213,7 +213,7 @@ func TestRunPicksAFunctionBeforeAnAccountThenPassesRealStdinToTheLaunchedCLI(t *
 	registryPath := filepath.Join(home, "accounts.json")
 	writeRegistry(t, registryPath, claudeHome, codexHome)
 
-	calls := fakeFzf(t, home, key("chat"), key("claude-1"), key("new"))
+	calls := fakeFzf(t, home, key("chat"), key("claude-1"), row(newChatKey))
 	stdinCapture := filepath.Join(home, "stdin-seen")
 	writeScript(t, filepath.Join(home, "bin", "claude"), fmt.Sprintf("#!/usr/bin/env bash\nhead -n1 > %q\n", stdinCapture))
 	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
@@ -267,6 +267,9 @@ func TestRunPicksAFunctionBeforeAnAccountThenPassesRealStdinToTheLaunchedCLI(t *
 	if string(seen) != "real-stdin-marker\n" {
 		t.Fatalf("expected claude to see real stdin, got %q", seen)
 	}
+	if rows := callFile(t, calls, "rows-2"); !strings.HasPrefix(rows, newChatKey+"\t＋ 新開對話\n") {
+		t.Fatalf("expected the conversation list to start with the new-conversation row, got: %s", rows)
+	}
 }
 
 func TestRunResumesTheSelectedAccountSession(t *testing.T) {
@@ -304,7 +307,7 @@ func TestRunResumesTheSelectedAccountSession(t *testing.T) {
 
 	registryPath := filepath.Join(home, "accounts.json")
 	writeRegistry(t, registryPath, claudeHome, codexHome)
-	calls := fakeFzf(t, home, key("chat"), key("claude-1"), key("resume"), row(sessionPath))
+	calls := fakeFzf(t, home, key("chat"), key("claude-1"), row(sessionPath))
 	argvCapture := filepath.Join(home, "claude-argv")
 	writeScript(t, filepath.Join(home, "bin", "claude"), fmt.Sprintf("#!/usr/bin/env bash\nprintf '%%s\\n' \"$@\" > %q\n", argvCapture))
 	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
@@ -316,8 +319,8 @@ func TestRunResumesTheSelectedAccountSession(t *testing.T) {
 	if got, err := os.ReadFile(argvCapture); err != nil || string(got) != "--resume\n"+sessionID+"\n" {
 		t.Fatalf("expected claude --resume %s, got %q, err %v", sessionID, got, err)
 	}
-	if got := callFile(t, calls, "rows-2"); !strings.Contains(got, "繼續既有對話") {
-		t.Fatalf("expected resume option, got %s", got)
+	if got := callFile(t, calls, "rows-2"); !strings.HasPrefix(got, newChatKey+"\t＋ 新開對話\n") || !strings.Contains(got, sessionPath) {
+		t.Fatalf("expected the conversation list to open with the new-conversation row, got %s", got)
 	}
 }
 
@@ -368,7 +371,7 @@ func TestRunResumeByTypedIDLaunchesInTheSessionsRecordedDirectory(t *testing.T) 
 
 			registryPath := filepath.Join(home, "accounts.json")
 			writeRegistry(t, registryPath, claudeHome, codexHome)
-			fakeFzf(t, home, key("chat"), key("claude-1"), key("resume"), typed("aaaaaaaa"))
+			fakeFzf(t, home, key("chat"), key("claude-1"), typed("aaaaaaaa"))
 			pwdCapture := filepath.Join(home, "claude-pwd")
 			writeScript(t, filepath.Join(home, "bin", "claude"), fmt.Sprintf("#!/usr/bin/env bash\npwd -P > %q\n", pwdCapture))
 			writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
@@ -430,7 +433,7 @@ func TestRunResumeByTypedIDWithSeveralMatchesLaunchesInThePickedSessionsDirector
 
 	registryPath := filepath.Join(home, "accounts.json")
 	writeRegistry(t, registryPath, claudeHome, codexHome)
-	fakeFzf(t, home, key("chat"), key("claude-1"), key("resume"), typed("aaaaaaaa"), row(paths[1]))
+	fakeFzf(t, home, key("chat"), key("claude-1"), typed("aaaaaaaa"), row(paths[1]))
 	argvCapture := filepath.Join(home, "claude-argv")
 	pwdCapture := filepath.Join(home, "claude-pwd")
 	writeScript(t, filepath.Join(home, "bin", "claude"), fmt.Sprintf("#!/usr/bin/env bash\npwd -P > %q\nprintf '%%s\\n' \"$@\" > %q\n", pwdCapture, argvCapture))
@@ -511,7 +514,7 @@ func TestUsageViewPrintsAndReturnsToTheMenu(t *testing.T) {
 		"five_hour": {"used_percentage": 55.0}
 	}`, resolvedClaudeHome, checkedAt), 0o644)
 
-	calls := fakeFzf(t, home, key("usage"), key("chat"), key("claude-1"), key("new"))
+	calls := fakeFzf(t, home, key("usage"), key("chat"), key("claude-1"), row(newChatKey))
 	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
 	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
 
@@ -556,7 +559,7 @@ func TestUsageViewWithNoSnapshotDirectoryShowsNoDataForEveryAccount(t *testing.T
 
 	usageDir := filepath.Join(home, "usage-not-created-yet")
 
-	calls := fakeFzf(t, home, key("usage"), key("chat"), key("claude-1"), key("new"))
+	calls := fakeFzf(t, home, key("usage"), key("chat"), key("claude-1"), row(newChatKey))
 	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
 	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
 
@@ -600,7 +603,7 @@ func TestUsageViewWithAnEmptySnapshotDirectoryShowsNoDataForEveryAccount(t *test
 	usageDir := filepath.Join(home, "usage")
 	os.MkdirAll(usageDir, 0o755)
 
-	calls := fakeFzf(t, home, key("usage"), key("chat"), key("claude-1"), key("new"))
+	calls := fakeFzf(t, home, key("usage"), key("chat"), key("claude-1"), row(newChatKey))
 	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
 	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
 
@@ -638,7 +641,7 @@ func TestUsageViewSurvivesAnUnreadableSnapshotDirectory(t *testing.T) {
 	usageDir := filepath.Join(home, "usage-is-a-file")
 	os.WriteFile(usageDir, []byte("not a directory"), 0o644)
 
-	calls := fakeFzf(t, home, key("usage"), key("chat"), key("claude-1"), key("new"))
+	calls := fakeFzf(t, home, key("usage"), key("chat"), key("claude-1"), row(newChatKey))
 	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
 	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
 
@@ -1157,7 +1160,7 @@ func TestManageAccountsSetsUsageDirectoryAndReportsIt(t *testing.T) {
 
 	customUsageDir := filepath.Join(home, "custom-usage")
 
-	calls := fakeFzf(t, home, key("accounts"), key("usage-dir"), typed(customUsageDir), cancel(), key("chat"), key("claude-1"), key("new"))
+	calls := fakeFzf(t, home, key("accounts"), key("usage-dir"), typed(customUsageDir), cancel(), key("chat"), key("claude-1"), row(newChatKey))
 	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
 	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
 
@@ -1207,7 +1210,7 @@ func TestManageAccountsClearsUsageDirectoryOnEmptyInput(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	fakeFzf(t, home, key("accounts"), key("usage-dir"), typed(""), cancel(), key("chat"), key("claude-1"), key("new"))
+	fakeFzf(t, home, key("accounts"), key("usage-dir"), typed(""), cancel(), key("chat"), key("claude-1"), row(newChatKey))
 	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
 	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
 
@@ -1256,7 +1259,7 @@ func TestManageAccountsOffersTrustAction(t *testing.T) {
 	registryPath := filepath.Join(home, "accounts.json")
 	writeRegistry(t, registryPath, claudeHome, codexHome)
 
-	calls := fakeFzf(t, home, key("accounts"), cancel(), key("chat"), key("claude-1"), key("new"))
+	calls := fakeFzf(t, home, key("accounts"), cancel(), key("chat"), key("claude-1"), row(newChatKey))
 	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
 	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
 
@@ -1294,7 +1297,7 @@ func TestManageAccountsTrustFillsAndReportsField(t *testing.T) {
 	registryPath := filepath.Join(home, "accounts.json")
 	writeRegistryTwoClaudeAccounts(t, registryPath, claude1Home, claude2Home, codexHome)
 
-	fakeFzf(t, home, key("accounts"), key("trust"), key("claude-1"), key("confirm"), cancel(), key("chat"), key("claude-1"), key("new"))
+	fakeFzf(t, home, key("accounts"), key("trust"), key("claude-1"), key("confirm"), cancel(), key("chat"), key("claude-1"), row(newChatKey))
 	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
 	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
 
@@ -1402,8 +1405,8 @@ func TestChatWithASingleUsableAccountSkipsTheAccountPicker(t *testing.T) {
 		t.Fatalf("menu run failed: %v\nstderr: %s", err, stderr)
 	}
 	argv := callFile(t, calls, "argv-1")
-	if !strings.Contains(argv, "--prompt=選擇對話方式：") || !strings.Contains(argv, "主選單 > 使用帳號對話 > Claude") {
-		t.Fatalf("expected the new-or-resume step naming the only account, got argv: %s", argv)
+	if !strings.Contains(argv, "--prompt=選擇對話或輸入 ID：") || !strings.Contains(argv, "--header=主選單 > 使用帳號對話 > Claude") {
+		t.Fatalf("expected the conversation list naming the only account, got argv: %s", argv)
 	}
 	if argv := callFile(t, calls, "argv-2"); !strings.Contains(argv, "--prompt=選擇功能：") {
 		t.Fatalf("expected ESC to return to the root menu, got argv: %s", argv)
@@ -1434,7 +1437,7 @@ func TestManageAccountsTrustCancelWritesNothing(t *testing.T) {
 	registryPath := filepath.Join(home, "accounts.json")
 	writeRegistryTwoClaudeAccounts(t, registryPath, claude1Home, claude2Home, codexHome)
 
-	fakeFzf(t, home, key("accounts"), key("trust"), key("claude-1"), key("cancel"), cancel(), key("chat"), key("claude-1"), key("new"))
+	fakeFzf(t, home, key("accounts"), key("trust"), key("claude-1"), key("cancel"), cancel(), key("chat"), key("claude-1"), row(newChatKey))
 	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
 	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
 
@@ -1490,7 +1493,7 @@ func TestChatPickerListsArchivedAccountLastWithSuffixAndStaysSelectable(t *testi
 	registryPath := filepath.Join(home, "accounts.json")
 	writeArchivedRegistry(t, registryPath, claudeHome, codexHome)
 
-	calls := fakeFzf(t, home, key("chat"), key("claude-1"), key("new"))
+	calls := fakeFzf(t, home, key("chat"), key("claude-1"), row(newChatKey))
 	launched := filepath.Join(home, "claude-launched")
 	writeScript(t, filepath.Join(home, "bin", "claude"), fmt.Sprintf("#!/usr/bin/env bash\ntouch %q\n", launched))
 	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
@@ -1565,7 +1568,7 @@ func TestManageAccountsArchiveTogglesAndRoundTrips(t *testing.T) {
 	calls := fakeFzf(t, home,
 		key("accounts"), key("archive"), key("claude-1"),
 		key("archive"), key("claude-1"),
-		cancel(), key("chat"), key("claude-1"), key("new"))
+		cancel(), key("chat"), key("claude-1"), row(newChatKey))
 	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
 	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
 
@@ -1611,7 +1614,7 @@ func TestUsageViewListsArchivedAccountLast(t *testing.T) {
 	registryPath := filepath.Join(home, "accounts.json")
 	writeArchivedRegistry(t, registryPath, claudeHome, codexHome)
 
-	fakeFzf(t, home, key("usage"), key("chat"), key("codex-1"), key("new"))
+	fakeFzf(t, home, key("usage"), key("chat"), key("codex-1"), row(newChatKey))
 	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
 	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
 
@@ -1760,17 +1763,17 @@ func TestChatEscStepsBackOneLevelAtATime(t *testing.T) {
 
 	calls := fakeFzf(t, home,
 		key("chat"), key("claude-1"), cancel(),
-		key("claude-1"), key("resume"), cancel(),
-		cancel(), cancel(), cancel())
+		key("claude-1"), cancel(),
+		cancel(), cancel())
 
 	if _, stderr, err := runMenu(t, registryPath, home, ""); err != nil {
 		t.Fatalf("menu run failed: %v\nstderr: %s", err, stderr)
 	}
 
 	want := []string{
-		"選擇功能：", "選擇帳號：", "選擇對話方式：",
-		"選擇帳號：", "選擇對話方式：", "搜尋或輸入對話 ID：",
-		"選擇對話方式：", "選擇帳號：", "選擇功能：",
+		"選擇功能：", "選擇帳號：", "選擇對話或輸入 ID：",
+		"選擇帳號：", "選擇對話或輸入 ID：",
+		"選擇帳號：", "選擇功能：",
 	}
 	for i, prompt := range want {
 		if argv := callFile(t, calls, fmt.Sprintf("argv-%d", i)); !strings.Contains(argv, "--prompt="+prompt) {
@@ -1791,7 +1794,7 @@ func TestChatResumeWithAnUnmatchedTypedIDReopensTheSessionPicker(t *testing.T) {
 	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
 	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
 
-	calls := fakeFzf(t, home, key("chat"), key("claude-1"), key("resume"), typed("zzzzzzzz"), cancel(), cancel(), cancel(), cancel())
+	calls := fakeFzf(t, home, key("chat"), key("claude-1"), typed("zzzzzzzz"), cancel(), cancel(), cancel(), cancel())
 
 	stdout, stderr, err := runMenu(t, registryPath, home, "")
 	if err != nil {
@@ -1800,7 +1803,7 @@ func TestChatResumeWithAnUnmatchedTypedIDReopensTheSessionPicker(t *testing.T) {
 	if !strings.Contains(stdout, "提醒：找不到 ID 為「zzzzzzzz」的對話。") {
 		t.Fatalf("expected the unmatched id to be reported, got: %s", stdout)
 	}
-	if argv := callFile(t, calls, "argv-4"); !strings.Contains(argv, "--prompt=搜尋或輸入對話 ID：") {
+	if argv := callFile(t, calls, "argv-3"); !strings.Contains(argv, "--prompt=選擇對話或輸入 ID：") {
 		t.Fatalf("expected the session picker to reopen, got argv: %s", argv)
 	}
 }
@@ -1945,5 +1948,59 @@ func TestEveryPickerShowsAKeyHintUnderThePathBar(t *testing.T) {
 		if argv := callFile(t, calls, fmt.Sprintf("argv-%d", i)); !strings.Contains(argv, hint) {
 			t.Fatalf("fzf call %d: expected %q in argv, got: %s", i, hint, argv)
 		}
+	}
+}
+
+func TestChatWithATooShortTypedIDReopensTheSessionPicker(t *testing.T) {
+	home := t.TempDir()
+	runWithFakePath(t, home)
+	claudeHome := filepath.Join(home, ".claude")
+	codexHome := filepath.Join(home, ".codex")
+	os.MkdirAll(claudeHome, 0o755)
+	os.MkdirAll(codexHome, 0o755)
+	registryPath := filepath.Join(home, "accounts.json")
+	writeRegistry(t, registryPath, claudeHome, codexHome)
+	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
+	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
+
+	calls := fakeFzf(t, home, key("chat"), key("claude-1"), typed("ab"), cancel(), cancel(), cancel())
+
+	stdout, stderr, err := runMenu(t, registryPath, home, "")
+	if err != nil {
+		t.Fatalf("expected a too-short id not to end the run: %v\nstderr: %s", err, stderr)
+	}
+	if !strings.Contains(stdout, "提醒：對話 ID 至少要輸入 4 個字元。") {
+		t.Fatalf("expected the short id to be reported, got: %s", stdout)
+	}
+	if argv := callFile(t, calls, "argv-3"); !strings.Contains(argv, "--prompt=選擇對話或輸入 ID：") {
+		t.Fatalf("expected the session picker to reopen, got argv: %s", argv)
+	}
+}
+
+func TestHandoffWithATooShortTypedIDReopensTheSessionPicker(t *testing.T) {
+	home := t.TempDir()
+	runWithFakePath(t, home)
+	project := filepath.Join(home, "project")
+	claudeHome := filepath.Join(home, ".claude")
+	codexHome := filepath.Join(home, ".codex")
+	for _, dir := range []string{project, claudeHome, codexHome} {
+		os.MkdirAll(dir, 0o755)
+	}
+	registryPath := filepath.Join(home, "accounts.json")
+	writeRegistry(t, registryPath, claudeHome, codexHome)
+	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
+	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
+
+	calls := fakeFzf(t, home, key("handoff"), key("claude-1"), typed("ab"), cancel(), cancel(), cancel())
+
+	stdout, stderr, err := runMenu(t, registryPath, project, "")
+	if err != nil {
+		t.Fatalf("expected a too-short id not to end the run: %v\nstderr: %s", err, stderr)
+	}
+	if !strings.Contains(stdout, "提醒：對話 ID 至少要輸入 4 個字元。") || strings.Contains(stdout, "無法搜尋") {
+		t.Fatalf("expected one short-id reminder, not a per-account search failure, got: %s", stdout)
+	}
+	if argv := callFile(t, calls, "argv-3"); !strings.Contains(argv, crumbSession) {
+		t.Fatalf("expected the session picker to reopen, got argv: %s", argv)
 	}
 }

@@ -21,6 +21,9 @@ import (
 // project, as opposed to one whose conversations could not be read.
 var ErrNoSessions = errors.New("no sessions")
 
+// ErrIDTooShort marks an id fragment too short to look up.
+var ErrIDTooShort = errors.New("conversation id too short")
+
 type Candidate struct {
 	Path        string
 	Description string
@@ -67,9 +70,9 @@ func ID(path, provider string) (string, error) {
 
 const maxCandidates = 5
 
-// minIDFragment keeps a one- or two-character entry from matching most of
+// MinIDFragment keeps a one- or two-character entry from matching most of
 // the history and burying the user in a picker.
-const minIDFragment = 4
+const MinIDFragment = 4
 
 func describe(startTime time.Time, sessionID, preview string) string {
 	return fmt.Sprintf("%s  %s  %s", startTime.Format("2006-01-02 15:04"), ShortID(sessionID), truncate(preview, 70))
@@ -84,8 +87,8 @@ func SortNewestFirst(matches []Match) {
 
 func normalizeFragment(fragment string) (string, error) {
 	fragment = strings.ToLower(strings.TrimSpace(fragment))
-	if len(fragment) < minIDFragment {
-		return "", fmt.Errorf("conversation id needs at least %d characters", minIDFragment)
+	if len(fragment) < MinIDFragment {
+		return "", fmt.Errorf("%w: needs at least %d characters", ErrIDTooShort, MinIDFragment)
 	}
 	return fragment, nil
 }
