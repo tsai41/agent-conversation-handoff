@@ -824,9 +824,10 @@ func manageAccounts(registryPath string) error {
 			if err != nil {
 				return err
 			}
+			// 取消 comes first so a reflex Enter or 1 changes nothing.
 			confirmation, err := pickKey([]kv{
-				{"confirm", "每個帳號都改讀第一個同 provider 帳號的設定檔"},
 				{"cancel", "取消"},
+				{"confirm", "每個帳號都改讀第一個同 provider 帳號的設定檔"},
 			}, actionCrumbs, "確認共用設定: ", true)
 			if err != nil {
 				if errors.Is(err, errCancelled) {
@@ -860,6 +861,7 @@ func manageAccounts(registryPath string) error {
 				warn(err)
 				continue
 			}
+			fmt.Printf("已更新「%s」的 alias。\n", accountLabels(r)[accountID])
 		case "login":
 			r, err := registry.Load(registryPath)
 			if err != nil {
@@ -905,10 +907,16 @@ func manageAccounts(registryPath string) error {
 				}
 				return err
 			}
-			if _, err := registry.AddAccount(registryPath, parts[0], parts[1], alias); err != nil {
+			imported, err := registry.AddAccount(registryPath, parts[0], parts[1], alias)
+			if err != nil {
 				warn(err)
 				continue
 			}
+			label := imported.ID
+			if updated, loadErr := registry.Load(registryPath); loadErr == nil {
+				label = accountLabels(updated)[imported.ID]
+			}
+			fmt.Printf("已匯入「%s」：%s\n", label, imported.Home)
 		case "archive":
 			r, err := registry.Load(registryPath)
 			if err != nil {
@@ -947,9 +955,14 @@ func manageAccounts(registryPath string) error {
 				}
 				return err
 			}
+			account, err := registry.FindAccount(r, accountID)
+			if err != nil {
+				return err
+			}
+			label := accountLabels(r)[accountID]
 			confirmation, err := pickKey([]kv{
-				{"confirm", "只從 ach 移除，保留所有帳號資料"},
 				{"cancel", "取消"},
+				{"confirm", fmt.Sprintf("只從 ach 移除「%s」，保留所有帳號資料", label)},
 			}, actionCrumbs, "確認取消登記: ", true)
 			if err != nil {
 				if errors.Is(err, errCancelled) {
@@ -962,6 +975,7 @@ func manageAccounts(registryPath string) error {
 					warn(err)
 					continue
 				}
+				fmt.Printf("已移除「%s」，帳號資料保留在 %s。\n", label, account.Home)
 			}
 		case "usage-dir":
 			input, err := readOptionalAlias(actionCrumbs, "新的用量資料目錄（留空即清除，改用預設路徑）: ")

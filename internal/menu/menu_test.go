@@ -1758,3 +1758,56 @@ func TestChatResumeWithAnUnmatchedTypedIDReopensTheSessionPicker(t *testing.T) {
 		t.Fatalf("expected the session picker to reopen, got argv: %s", argv)
 	}
 }
+
+func TestRemovingAnAccountNamesItDefaultsToCancelAndReportsTheResult(t *testing.T) {
+	home := t.TempDir()
+	runWithFakePath(t, home)
+	claudeHome := filepath.Join(home, ".claude")
+	codexHome := filepath.Join(home, ".codex")
+	os.MkdirAll(claudeHome, 0o755)
+	os.MkdirAll(codexHome, 0o755)
+	registryPath := filepath.Join(home, "accounts.json")
+	writeRegistry(t, registryPath, claudeHome, codexHome)
+
+	calls := fakeFzf(t, home, key("accounts"), key("remove"), key("claude-1"), key("confirm"), cancel(), cancel())
+
+	stdout, stderr, err := runMenu(t, registryPath, home, "")
+	if err != nil {
+		t.Fatalf("menu run failed: %v\nstderr: %s", err, stderr)
+	}
+	rows := strings.Split(strings.TrimSpace(callFile(t, calls, "rows-3")), "\n")
+	if len(rows) != 2 || !strings.HasPrefix(rows[0], "cancel\t") || !strings.Contains(rows[1], "移除「Claude」") {
+		t.Fatalf("expected 取消 first and the confirmation to name the account, got: %v", rows)
+	}
+	if !strings.Contains(stdout, "已移除「Claude」，帳號資料保留在 ") {
+		t.Fatalf("expected the removal to be reported, got: %s", stdout)
+	}
+	updated, err := registry.Load(registryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := registry.FindAccount(updated, "claude-1"); err == nil {
+		t.Fatal("expected claude-1 to be removed from the registry")
+	}
+}
+
+func TestRenamingAnAccountReportsTheResult(t *testing.T) {
+	home := t.TempDir()
+	runWithFakePath(t, home)
+	claudeHome := filepath.Join(home, ".claude")
+	codexHome := filepath.Join(home, ".codex")
+	os.MkdirAll(claudeHome, 0o755)
+	os.MkdirAll(codexHome, 0o755)
+	registryPath := filepath.Join(home, "accounts.json")
+	writeRegistry(t, registryPath, claudeHome, codexHome)
+
+	fakeFzf(t, home, key("accounts"), key("rename"), key("claude-1"), typed("work"), cancel(), cancel())
+
+	stdout, stderr, err := runMenu(t, registryPath, home, "")
+	if err != nil {
+		t.Fatalf("menu run failed: %v\nstderr: %s", err, stderr)
+	}
+	if !strings.Contains(stdout, "已更新「Claude」的 alias。") {
+		t.Fatalf("expected the rename to be reported, got: %s", stdout)
+	}
+}
