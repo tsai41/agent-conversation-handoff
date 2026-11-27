@@ -122,6 +122,18 @@ func labelOf(candidates []kv, key string) string {
 	return key
 }
 
+// fzfArgs is the argv every picker shares. The layout is pinned rather than
+// left to FZF_DEFAULT_OPTS: without --layout=reverse the list runs bottom-up
+// and the path bar sits between it and the prompt. Options passed here
+// override only these settings; the user's colours and pointer still apply.
+func fzfArgs(crumbs, prompt string, extra ...string) []string {
+	args := []string{"--height=~15", "--border=none", "--layout=reverse", "--prompt=" + prompt}
+	if crumbs != "" {
+		args = append(args, "--header="+crumbs)
+	}
+	return append(args, extra...)
+}
+
 // pickKey runs fzf over candidates ("key\tlabel" rows, label-only visible)
 // and returns the chosen key. When numbered is true, candidates are
 // prefixed "1. ", "2. ", ... and fzf is given digit-key shortcuts
@@ -144,10 +156,7 @@ func pickKey(candidates []kv, crumbs, prompt string, numbered bool) (string, err
 		rows.WriteString(c.Label)
 		rows.WriteByte('\n')
 	}
-	args := []string{"--height=~15", "--border=none", "--with-nth=2..", "--delimiter=\t", "--prompt=" + prompt}
-	if crumbs != "" {
-		args = append(args, "--header="+crumbs)
-	}
+	args := fzfArgs(crumbs, prompt, "--with-nth=2..", "--delimiter=\t")
 	if numbered {
 		shortcuts := len(candidates)
 		if shortcuts > 9 {
@@ -189,10 +198,7 @@ func pickSession(candidates []session.Candidate, crumbs, prompt string) (string,
 		rows.WriteString(c.Description)
 		rows.WriteByte('\n')
 	}
-	args := []string{"--height=~15", "--border=none", "--with-nth=2..", "--delimiter=\t", "--print-query", "--prompt=" + prompt}
-	if crumbs != "" {
-		args = append(args, "--header="+crumbs)
-	}
+	args := fzfArgs(crumbs, prompt, "--with-nth=2..", "--delimiter=\t", "--print-query")
 	cmd := exec.Command("fzf", args...)
 	cmd.Stdin = strings.NewReader(rows.String())
 	out, err := cmd.Output()
@@ -241,10 +247,9 @@ func readLine(crumbs, prompt string) (string, error) {
 	if _, err := exec.LookPath("fzf"); err != nil {
 		return "", fmt.Errorf("fzf is required")
 	}
-	args := []string{"--height=~15", "--border=none", "--print-query", "--prompt=" + prompt}
-	if crumbs != "" {
-		args = append(args, "--header="+crumbs)
-	}
+	// No match count or separator: over an empty list they read as "the
+	// search found nothing" rather than "type here".
+	args := fzfArgs(crumbs, prompt, "--print-query", "--info=hidden", "--no-separator")
 	cmd := exec.Command("fzf", args...)
 	cmd.Stdin = strings.NewReader("")
 	out, err := cmd.Output()

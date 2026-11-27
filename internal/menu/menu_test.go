@@ -1880,3 +1880,38 @@ func TestSessionListCrumbKeepsTheTypedIDHintShort(t *testing.T) {
 		})
 	}
 }
+
+func TestEveryPickerPinsTheLayoutAndTextInputHidesTheMatchCount(t *testing.T) {
+	home := t.TempDir()
+	runWithFakePath(t, home)
+	claudeHome := filepath.Join(home, ".claude")
+	codexHome := filepath.Join(home, ".codex")
+	os.MkdirAll(claudeHome, 0o755)
+	os.MkdirAll(codexHome, 0o755)
+	registryPath := filepath.Join(home, "accounts.json")
+	writeRegistry(t, registryPath, claudeHome, codexHome)
+	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
+	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
+
+	// root, 帳號設定, account picker, alias input, then back out; then the
+	// handoff source and conversation pickers.
+	calls := fakeFzf(t, home,
+		key("accounts"), key("rename"), key("claude-1"), cancel(), cancel(),
+		key("handoff"), key("claude-1"), cancel(), cancel(), cancel())
+
+	if _, stderr, err := runMenu(t, registryPath, home, ""); err != nil {
+		t.Fatalf("menu run failed: %v\nstderr: %s", err, stderr)
+	}
+	for i := 0; i <= 7; i++ {
+		if argv := callFile(t, calls, fmt.Sprintf("argv-%d", i)); !strings.Contains(argv, "--layout=reverse") {
+			t.Fatalf("fzf call %d: expected a pinned reverse layout, got argv: %s", i, argv)
+		}
+	}
+	input := callFile(t, calls, "argv-3")
+	if !strings.Contains(input, "--info=hidden") || !strings.Contains(input, "--no-separator") {
+		t.Fatalf("expected the text input to hide the match count, got argv: %s", input)
+	}
+	if picker := callFile(t, calls, "argv-7"); strings.Contains(picker, "--info=hidden") {
+		t.Fatalf("expected the conversation picker to keep its match count, got argv: %s", picker)
+	}
+}
