@@ -87,19 +87,18 @@ func sourceAccountCrumb(label string) string {
 	return "來源帳號：" + label
 }
 
-// sessionListCrumb appends what the conversation picker below it holds. It
-// stays short because fzf cuts the path bar at the terminal width, and the
-// part that must survive is that an id can still be typed.
+// sessionListCrumb appends what the conversation picker below it holds.
+// That a typed id still works is the key hint's job, on its own line.
 func sessionListCrumb(crumbs string, listing session.CandidateList, err error) string {
 	switch {
 	case errors.Is(err, session.ErrNoSessions), err == nil && listing.Total == 0:
-		return crumbs + "（目前專案沒有對話，可直接輸入 ID）"
+		return crumbs + "（目前專案沒有對話）"
 	case err != nil:
-		return fmt.Sprintf("%s（可直接輸入 ID；無法讀取對話：%v）", crumbs, err)
+		return fmt.Sprintf("%s（無法讀取對話：%v）", crumbs, err)
 	case listing.Total > len(listing.Candidates):
-		return fmt.Sprintf("%s（%d 筆，顯示最新 %d 筆；可輸入 ID 找其他對話）", crumbs, listing.Total, len(listing.Candidates))
+		return fmt.Sprintf("%s（%d 筆，顯示最新 %d 筆）", crumbs, listing.Total, len(listing.Candidates))
 	default:
-		return fmt.Sprintf("%s（%d 筆；可輸入 ID 找其他對話）", crumbs, listing.Total)
+		return fmt.Sprintf("%s（%d 筆）", crumbs, listing.Total)
 	}
 }
 
@@ -126,12 +125,44 @@ func labelOf(candidates []kv, key string) string {
 // left to FZF_DEFAULT_OPTS: without --layout=reverse the list runs bottom-up
 // and the path bar sits between it and the prompt. Options passed here
 // override only these settings; the user's colours and pointer still apply.
-func fzfArgs(crumbs, prompt string, extra ...string) []string {
+//
+// The header is the path bar with a key hint on its own line below it, so
+// a path bar cut at the terminal width never takes the hint with it.
+func fzfArgs(crumbs, hint, prompt string, extra ...string) []string {
 	args := []string{"--height=~15", "--border=none", "--layout=reverse", "--prompt=" + prompt}
-	if crumbs != "" {
-		args = append(args, "--header="+crumbs)
+	header := crumbs
+	if hint != "" {
+		if header != "" {
+			header += "\n"
+		}
+		header += hint
+	}
+	if header != "" {
+		args = append(args, "--header="+header)
 	}
 	return append(args, extra...)
+}
+
+// Key hints shown under the path bar.
+const (
+	hintDigits     = "數字鍵直接選"
+	hintSearchOrID = "打字搜尋，或直接輸入對話 ID"
+	hintSearch     = "打字搜尋"
+	hintTextInput  = "Enter 確認 · ESC 取消"
+)
+
+// escHint says what ESC does at the level crumbs names: it leaves the
+// program at the root, abandons first-run setup there, and steps back one
+// level everywhere else.
+func escHint(crumbs string) string {
+	switch {
+	case crumbs == breadcrumb():
+		return "ESC 離開"
+	case strings.HasPrefix(crumbs, breadcrumb(crumbSetup)):
+		return "ESC 取消初次設定"
+	default:
+		return "ESC 回上一層"
+	}
 }
 
 // pickKey runs fzf over candidates ("key\tlabel" rows, label-only visible)
@@ -156,7 +187,11 @@ func pickKey(candidates []kv, crumbs, prompt string, numbered bool) (string, err
 		rows.WriteString(c.Label)
 		rows.WriteByte('\n')
 	}
-	args := fzfArgs(crumbs, prompt, "--with-nth=2..", "--delimiter=\t")
+	hint := escHint(crumbs)
+	if numbered {
+		hint = hintDigits + " · " + hint
+	}
+	args := fzfArgs(crumbs, hint, prompt, "--with-nth=2..", "--delimiter=\t")
 	if numbered {
 		shortcuts := len(candidates)
 		if shortcuts > 9 {
@@ -188,6 +223,10 @@ func pickKey(candidates []kv, crumbs, prompt string, numbered bool) (string, err
 // an id the user already knows is regularly absent from it. Such an id
 // comes back as the query, with an empty path.
 func pickSession(candidates []session.Candidate, crumbs, prompt string) (string, string, error) {
+	return pickSessionHinted(candidates, crumbs, hintSearchOrID+" · "+escHint(crumbs), prompt)
+}
+
+func pickSessionHinted(candidates []session.Candidate, crumbs, hint, prompt string) (string, string, error) {
 	if _, err := exec.LookPath("fzf"); err != nil {
 		return "", "", fmt.Errorf("fzf is required")
 	}
@@ -198,7 +237,7 @@ func pickSession(candidates []session.Candidate, crumbs, prompt string) (string,
 		rows.WriteString(c.Description)
 		rows.WriteByte('\n')
 	}
-	args := fzfArgs(crumbs, prompt, "--with-nth=2..", "--delimiter=\t", "--print-query")
+	args := fzfArgs(crumbs, hint, prompt, "--with-nth=2..", "--delimiter=\t", "--print-query")
 	cmd := exec.Command("fzf", args...)
 	cmd.Stdin = strings.NewReader(rows.String())
 	out, err := cmd.Output()
@@ -228,7 +267,7 @@ func pickSession(candidates []session.Candidate, crumbs, prompt string) (string,
 // means anything -- disambiguating an id that already matched several
 // conversations, where whatever was typed is not another id to go look up.
 func pickSessionRow(candidates []session.Candidate, crumbs, prompt string) (string, error) {
-	path, _, err := pickSession(candidates, crumbs, prompt)
+	path, _, err := pickSessionHinted(candidates, crumbs, hintSearch+" · "+escHint(crumbs), prompt)
 	if err != nil {
 		return "", err
 	}
@@ -249,7 +288,7 @@ func readLine(crumbs, prompt string) (string, error) {
 	}
 	// No match count or separator: over an empty list they read as "the
 	// search found nothing" rather than "type here".
-	args := fzfArgs(crumbs, prompt, "--print-query", "--info=hidden", "--no-separator")
+	args := fzfArgs(crumbs, hintTextInput, prompt, "--print-query", "--info=hidden", "--no-separator")
 	cmd := exec.Command("fzf", args...)
 	cmd.Stdin = strings.NewReader("")
 	out, err := cmd.Output()

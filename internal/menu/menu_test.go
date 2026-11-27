@@ -709,7 +709,7 @@ func TestHandoffUsesAnIDTypedIntoTheSearchBox(t *testing.T) {
 	if !strings.Contains(sessionArgv, "--print-query") {
 		t.Fatalf("expected the session picker to return its query, got argv: %s", sessionArgv)
 	}
-	if !strings.Contains(sessionArgv, "目前專案沒有對話，可直接輸入 ID") {
+	if !strings.Contains(sessionArgv, "目前專案沒有對話") {
 		t.Fatalf("expected the scan failure in the picker header, got argv: %s", sessionArgv)
 	}
 	if rows := callFile(t, calls, "rows-2"); strings.Contains(rows, "輸入對話 ID") {
@@ -801,7 +801,7 @@ func TestHandoffPicksSourceThenConversationThenTarget(t *testing.T) {
 	if strings.Contains(rows, longUUID) {
 		t.Fatalf("full uuid leaked into session rows: %s", rows)
 	}
-	if sessionArgv := callFile(t, calls, "argv-2"); !strings.Contains(sessionArgv, "--header=主選單 > 接手對話 > 來源帳號：Claude > 來源對話（1 筆；可輸入 ID 找其他對話）") {
+	if sessionArgv := callFile(t, calls, "argv-2"); !strings.Contains(sessionArgv, "--header=主選單 > 接手對話 > 來源帳號：Claude > 來源對話（1 筆）") {
 		t.Fatalf("expected the conversation count in the picker header, got argv: %s", sessionArgv)
 	}
 	if targetArgv := callFile(t, calls, "argv-3"); !strings.Contains(targetArgv, "--header=主選單 > 接手對話 > 來源帳號：Claude > 目標帳號") {
@@ -1858,7 +1858,7 @@ func TestRenamingAnAccountReportsTheResult(t *testing.T) {
 	}
 }
 
-func TestSessionListCrumbKeepsTheTypedIDHintShort(t *testing.T) {
+func TestSessionListCrumbSaysWhatTheListHolds(t *testing.T) {
 	three := make([]session.Candidate, 3)
 	tests := []struct {
 		name    string
@@ -1866,11 +1866,11 @@ func TestSessionListCrumbKeepsTheTypedIDHintShort(t *testing.T) {
 		err     error
 		want    string
 	}{
-		{"no sessions directory", session.CandidateList{}, fmt.Errorf("%w: /x", session.ErrNoSessions), "P（目前專案沒有對話，可直接輸入 ID）"},
-		{"empty listing", session.CandidateList{}, nil, "P（目前專案沒有對話，可直接輸入 ID）"},
-		{"read failure", session.CandidateList{}, fmt.Errorf("boom"), "P（可直接輸入 ID；無法讀取對話：boom）"},
-		{"all shown", session.CandidateList{Candidates: three, Total: 3}, nil, "P（3 筆；可輸入 ID 找其他對話）"},
-		{"truncated", session.CandidateList{Candidates: three, Total: 40}, nil, "P（40 筆，顯示最新 3 筆；可輸入 ID 找其他對話）"},
+		{"no sessions directory", session.CandidateList{}, fmt.Errorf("%w: /x", session.ErrNoSessions), "P（目前專案沒有對話）"},
+		{"empty listing", session.CandidateList{}, nil, "P（目前專案沒有對話）"},
+		{"read failure", session.CandidateList{}, fmt.Errorf("boom"), "P（無法讀取對話：boom）"},
+		{"all shown", session.CandidateList{Candidates: three, Total: 3}, nil, "P（3 筆）"},
+		{"truncated", session.CandidateList{Candidates: three, Total: 40}, nil, "P（40 筆，顯示最新 3 筆）"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1913,5 +1913,37 @@ func TestEveryPickerPinsTheLayoutAndTextInputHidesTheMatchCount(t *testing.T) {
 	}
 	if picker := callFile(t, calls, "argv-7"); strings.Contains(picker, "--info=hidden") {
 		t.Fatalf("expected the conversation picker to keep its match count, got argv: %s", picker)
+	}
+}
+
+func TestEveryPickerShowsAKeyHintUnderThePathBar(t *testing.T) {
+	home := t.TempDir()
+	runWithFakePath(t, home)
+	claudeHome := filepath.Join(home, ".claude")
+	codexHome := filepath.Join(home, ".codex")
+	os.MkdirAll(claudeHome, 0o755)
+	os.MkdirAll(codexHome, 0o755)
+	registryPath := filepath.Join(home, "accounts.json")
+	writeRegistry(t, registryPath, claudeHome, codexHome)
+	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
+	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
+
+	calls := fakeFzf(t, home,
+		key("accounts"), key("rename"), key("claude-1"), cancel(), cancel(),
+		key("handoff"), key("claude-1"), cancel(), cancel(), cancel())
+
+	if _, stderr, err := runMenu(t, registryPath, home, ""); err != nil {
+		t.Fatalf("menu run failed: %v\nstderr: %s", err, stderr)
+	}
+	want := map[int]string{
+		0: "--header=主選單\n數字鍵直接選 · ESC 離開\n",
+		1: "--header=主選單 > 帳號設定\n數字鍵直接選 · ESC 回上一層\n",
+		3: "\nEnter 確認 · ESC 取消\n",
+		7: "\n打字搜尋，或直接輸入對話 ID · ESC 回上一層\n",
+	}
+	for i, hint := range want {
+		if argv := callFile(t, calls, fmt.Sprintf("argv-%d", i)); !strings.Contains(argv, hint) {
+			t.Fatalf("fzf call %d: expected %q in argv, got: %s", i, hint, argv)
+		}
 	}
 }
