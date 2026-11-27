@@ -6,7 +6,7 @@
 
 - 預設路徑：`~/.config/agent-conversation-handoff/usage`。
 - `--usage-dir` 可覆蓋；預設路徑如何隨 `ACH_CONFIG_DIR` 改變，見 [README 的「設定檔位置」](../README.md#設定檔位置)。
-- 也可以在 `帳號設定 > 設定用量資料目錄` 設定，設定後存進 registry 的 `usage_dir`。
+- 也可以在 `帳號設定 > 用量資料目錄` 設定，設定後存進 registry 的 `usage_dir`。
 - 優先順序：這次執行明確帶 `--usage-dir` 就用它，否則用 registry 的 `usage_dir`，都沒有才用預設路徑。選單畫面每次都會印出實際讀的目錄。
 
 ## 檔名

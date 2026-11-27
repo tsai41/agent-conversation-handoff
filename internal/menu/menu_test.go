@@ -1063,7 +1063,7 @@ func TestOfferSharedSettingsCountsAlreadySharedEntriesInTheTotal(t *testing.T) {
 	}}
 	target := registry.Account{ID: "claude-2", Provider: "claude", Number: 2, Home: targetHome}
 
-	out := captureStdout(t, func() { offerSharedSettings(r, target, "") })
+	out := captureStdout(t, func() { offerSharedSettings(r, target, "", false) })
 
 	if !strings.Contains(out, "5/6 個項目") {
 		t.Fatalf("expected the summary to count all six entries, got: %s", out)
@@ -1170,17 +1170,17 @@ func TestManageAccountsSetsUsageDirectoryAndReportsIt(t *testing.T) {
 	}
 
 	actions := callFile(t, calls, "rows-1")
-	if !strings.Contains(actions, "設定用量資料目錄") {
+	if !strings.Contains(actions, "用量資料目錄") {
 		t.Fatalf("expected 帳號設定 to offer setting the usage directory, got: %s", actions)
 	}
 	if !strings.Contains(stdout, customUsageDir) {
 		t.Fatalf("expected the new directory to be reported back, got: %s", stdout)
 	}
-	if strings.Contains(stdout, "主選單 > 帳號設定 > 設定用量資料目錄") {
+	if strings.Contains(stdout, "主選單 > 帳號設定 > 用量資料目錄") {
 		t.Fatalf("expected the input path bar not to remain in stdout, got: %s", stdout)
 	}
 	inputArgv := callFile(t, calls, "argv-2")
-	if !strings.Contains(inputArgv, "--header=主選單 > 帳號設定 > 設定用量資料目錄") {
+	if !strings.Contains(inputArgv, "--header=主選單 > 帳號設定 > 用量資料目錄") {
 		t.Fatalf("expected the input path bar in the picker, got argv: %s", inputArgv)
 	}
 
@@ -1259,14 +1259,14 @@ func TestManageAccountsOffersTrustAction(t *testing.T) {
 	registryPath := filepath.Join(home, "accounts.json")
 	writeRegistry(t, registryPath, claudeHome, codexHome)
 
-	calls := fakeFzf(t, home, key("accounts"), cancel(), key("chat"), key("claude-1"), row(newChatKey))
+	calls := fakeFzf(t, home, key("accounts"), key("sync"), cancel(), cancel(), key("chat"), key("claude-1"), row(newChatKey))
 	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
 	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
 
 	if _, stderr, err := runMenu(t, registryPath, home, ""); err != nil {
 		t.Fatalf("menu run failed: %v\nstderr: %s", err, stderr)
 	}
-	actions := callFile(t, calls, "rows-1")
+	actions := callFile(t, calls, "rows-2")
 	if !strings.Contains(actions, "同步專案信任到其他帳號") {
 		t.Fatalf("expected 帳號設定 to offer 同步專案信任到其他帳號, got: %s", actions)
 	}
@@ -1297,7 +1297,7 @@ func TestManageAccountsTrustFillsAndReportsField(t *testing.T) {
 	registryPath := filepath.Join(home, "accounts.json")
 	writeRegistryTwoClaudeAccounts(t, registryPath, claude1Home, claude2Home, codexHome)
 
-	fakeFzf(t, home, key("accounts"), key("trust"), key("claude-1"), key("confirm"), cancel(), key("chat"), key("claude-1"), row(newChatKey))
+	fakeFzf(t, home, key("accounts"), key("sync"), key("trust"), key("claude-1"), key("confirm"), cancel(), cancel(), key("chat"), key("claude-1"), row(newChatKey))
 	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
 	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
 
@@ -1338,7 +1338,7 @@ func TestManageAccountsTrustWithOneClaudeAccountExplainsAndTouchesNothing(t *tes
 	registryPath := filepath.Join(home, "accounts.json")
 	writeRegistry(t, registryPath, claudeHome, codexHome)
 
-	calls := fakeFzf(t, home, key("accounts"), key("trust"), cancel(), cancel())
+	calls := fakeFzf(t, home, key("accounts"), key("sync"), key("trust"), cancel(), cancel(), cancel())
 	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
 	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
 
@@ -1349,8 +1349,8 @@ func TestManageAccountsTrustWithOneClaudeAccountExplainsAndTouchesNothing(t *tes
 	if !strings.Contains(stdout, "沒有其他 Claude 帳號可以同步") {
 		t.Fatalf("expected an explanation that there is nothing to sync, got: %s", stdout)
 	}
-	if argv := callFile(t, calls, "argv-2"); !strings.Contains(argv, "--prompt=選擇動作：") {
-		t.Fatalf("expected 帳號設定 to reopen without a source picker, got argv: %s", argv)
+	if argv := callFile(t, calls, "argv-3"); !strings.Contains(argv, "--header=主選單 > 帳號設定 > 跨帳號同步\n") {
+		t.Fatalf("expected 跨帳號同步 to reopen without a source picker, got argv: %s", argv)
 	}
 	raw, err := os.ReadFile(filepath.Join(claudeHome, ".claude.json"))
 	if err != nil {
@@ -1373,12 +1373,12 @@ func TestManageAccountsTrustOffersOnlyClaudeSources(t *testing.T) {
 	registryPath := filepath.Join(home, "accounts.json")
 	writeRegistryTwoClaudeAccounts(t, registryPath, claude1Home, claude2Home, codexHome)
 
-	calls := fakeFzf(t, home, key("accounts"), key("trust"), cancel(), cancel(), cancel())
+	calls := fakeFzf(t, home, key("accounts"), key("sync"), key("trust"), cancel(), cancel(), cancel(), cancel())
 
 	if _, stderr, err := runMenu(t, registryPath, home, ""); err != nil {
 		t.Fatalf("menu run failed: %v\nstderr: %s", err, stderr)
 	}
-	rows := callFile(t, calls, "rows-2")
+	rows := callFile(t, calls, "rows-3")
 	if strings.Contains(rows, "codex-1") || !strings.Contains(rows, "claude-1") || !strings.Contains(rows, "claude-2") {
 		t.Fatalf("expected only Claude accounts as trust sources, got: %s", rows)
 	}
@@ -1437,7 +1437,7 @@ func TestManageAccountsTrustCancelWritesNothing(t *testing.T) {
 	registryPath := filepath.Join(home, "accounts.json")
 	writeRegistryTwoClaudeAccounts(t, registryPath, claude1Home, claude2Home, codexHome)
 
-	fakeFzf(t, home, key("accounts"), key("trust"), key("claude-1"), key("cancel"), cancel(), key("chat"), key("claude-1"), row(newChatKey))
+	fakeFzf(t, home, key("accounts"), key("sync"), key("trust"), key("claude-1"), key("cancel"), cancel(), cancel(), key("chat"), key("claude-1"), row(newChatKey))
 	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
 	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
 
@@ -1566,9 +1566,9 @@ func TestManageAccountsArchiveTogglesAndRoundTrips(t *testing.T) {
 	writeRegistry(t, registryPath, claudeHome, codexHome)
 
 	calls := fakeFzf(t, home,
-		key("accounts"), key("archive"), key("claude-1"),
-		key("archive"), key("claude-1"),
-		cancel(), key("chat"), key("claude-1"), row(newChatKey))
+		key("accounts"), key("manage"), key("claude-1"), key("archive"), cancel(),
+		key("claude-1"), key("archive"),
+		cancel(), cancel(), cancel(), cancel())
 	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
 	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
 
@@ -1577,14 +1577,17 @@ func TestManageAccountsArchiveTogglesAndRoundTrips(t *testing.T) {
 		t.Fatalf("menu run failed: %v\nstderr: %s", err, stderr)
 	}
 
-	if !strings.Contains(callFile(t, calls, "rows-1"), "封存／解除封存帳號") {
-		t.Fatalf("expected 帳號設定 to offer the archive action, got: %s", callFile(t, calls, "rows-1"))
+	if first := callFile(t, calls, "rows-3"); !strings.Contains(first, "archive\t3. 封存\n") {
+		t.Fatalf("expected an active account to offer only 封存, got: %s", first)
+	}
+	if second := callFile(t, calls, "rows-4"); !strings.Contains(second, "archive\t3. 解除封存\n") {
+		t.Fatalf("expected an archived account to offer only 解除封存, got: %s", second)
 	}
 	if !strings.Contains(stdout, "已封存「Claude」，資料與對話紀錄都沒動。") {
 		t.Fatalf("expected the archive confirmation, got: %s", stdout)
 	}
 	// The second pick happens with claude-1 archived, so it is listed last.
-	second := strings.Split(strings.TrimSpace(callFile(t, calls, "rows-4")), "\n")
+	second := strings.Split(strings.TrimSpace(callFile(t, calls, "rows-5")), "\n")
 	if len(second) != 2 || !strings.Contains(second[0], "Codex") || !strings.Contains(second[1], "Claude（已封存）") {
 		t.Fatalf("expected the picker to list the archived account last, got: %v", second)
 	}
@@ -1818,13 +1821,16 @@ func TestRemovingAnAccountNamesItDefaultsToCancelAndReportsTheResult(t *testing.
 	registryPath := filepath.Join(home, "accounts.json")
 	writeRegistry(t, registryPath, claudeHome, codexHome)
 
-	calls := fakeFzf(t, home, key("accounts"), key("remove"), key("claude-1"), key("confirm"), cancel(), cancel())
+	calls := fakeFzf(t, home, key("accounts"), key("manage"), key("claude-1"), key("remove"), key("confirm"), cancel(), cancel(), cancel())
 
 	stdout, stderr, err := runMenu(t, registryPath, home, "")
 	if err != nil {
 		t.Fatalf("menu run failed: %v\nstderr: %s", err, stderr)
 	}
-	rows := strings.Split(strings.TrimSpace(callFile(t, calls, "rows-3")), "\n")
+	rows := strings.Split(strings.TrimSpace(callFile(t, calls, "rows-4")), "\n")
+	if argv := callFile(t, calls, "argv-5"); !strings.Contains(argv, "--prompt=選擇帳號：") {
+		t.Fatalf("expected removal to return to the account picker, got argv: %s", argv)
+	}
 	if len(rows) != 2 || !strings.HasPrefix(rows[0], "cancel\t") || !strings.Contains(rows[1], "移除「Claude」") {
 		t.Fatalf("expected 取消 first and the confirmation to name the account, got: %v", rows)
 	}
@@ -1850,7 +1856,7 @@ func TestRenamingAnAccountReportsTheResult(t *testing.T) {
 	registryPath := filepath.Join(home, "accounts.json")
 	writeRegistry(t, registryPath, claudeHome, codexHome)
 
-	fakeFzf(t, home, key("accounts"), key("rename"), key("claude-1"), typed("work"), cancel(), cancel())
+	calls := fakeFzf(t, home, key("accounts"), key("manage"), key("claude-1"), key("rename"), typed("work"), cancel(), cancel(), cancel(), cancel())
 
 	stdout, stderr, err := runMenu(t, registryPath, home, "")
 	if err != nil {
@@ -1858,6 +1864,9 @@ func TestRenamingAnAccountReportsTheResult(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "已更新「Claude」的 alias。") {
 		t.Fatalf("expected the rename to be reported, got: %s", stdout)
+	}
+	if argv := callFile(t, calls, "argv-5"); !strings.Contains(argv, "--header=主選單 > 帳號設定 > 管理帳號 > Claude\n") {
+		t.Fatalf("expected the rename to return to the same account's actions, got argv: %s", argv)
 	}
 }
 
@@ -1899,22 +1908,22 @@ func TestEveryPickerPinsTheLayoutAndTextInputHidesTheMatchCount(t *testing.T) {
 	// root, 帳號設定, account picker, alias input, then back out; then the
 	// handoff source and conversation pickers.
 	calls := fakeFzf(t, home,
-		key("accounts"), key("rename"), key("claude-1"), cancel(), cancel(),
+		key("accounts"), key("manage"), key("claude-1"), key("rename"), cancel(), cancel(), cancel(), cancel(),
 		key("handoff"), key("claude-1"), cancel(), cancel(), cancel())
 
 	if _, stderr, err := runMenu(t, registryPath, home, ""); err != nil {
 		t.Fatalf("menu run failed: %v\nstderr: %s", err, stderr)
 	}
-	for i := 0; i <= 7; i++ {
+	for i := 0; i <= 10; i++ {
 		if argv := callFile(t, calls, fmt.Sprintf("argv-%d", i)); !strings.Contains(argv, "--layout=reverse") {
 			t.Fatalf("fzf call %d: expected a pinned reverse layout, got argv: %s", i, argv)
 		}
 	}
-	input := callFile(t, calls, "argv-3")
+	input := callFile(t, calls, "argv-4")
 	if !strings.Contains(input, "--info=hidden") || !strings.Contains(input, "--no-separator") {
 		t.Fatalf("expected the text input to hide the match count, got argv: %s", input)
 	}
-	if picker := callFile(t, calls, "argv-7"); strings.Contains(picker, "--info=hidden") {
+	if picker := callFile(t, calls, "argv-10"); strings.Contains(picker, "--info=hidden") {
 		t.Fatalf("expected the conversation picker to keep its match count, got argv: %s", picker)
 	}
 }
@@ -1932,17 +1941,17 @@ func TestEveryPickerShowsAKeyHintUnderThePathBar(t *testing.T) {
 	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
 
 	calls := fakeFzf(t, home,
-		key("accounts"), key("rename"), key("claude-1"), cancel(), cancel(),
+		key("accounts"), key("manage"), key("claude-1"), key("rename"), cancel(), cancel(), cancel(), cancel(),
 		key("handoff"), key("claude-1"), cancel(), cancel(), cancel())
 
 	if _, stderr, err := runMenu(t, registryPath, home, ""); err != nil {
 		t.Fatalf("menu run failed: %v\nstderr: %s", err, stderr)
 	}
 	want := map[int]string{
-		0: "--header=主選單\n數字鍵直接選 · ESC 離開\n",
-		1: "--header=主選單 > 帳號設定\n數字鍵直接選 · ESC 回上一層\n",
-		3: "\nEnter 確認 · ESC 取消\n",
-		7: "\n打字搜尋，或直接輸入對話 ID · ESC 回上一層\n",
+		0:  "--header=主選單\n數字鍵直接選 · ESC 離開\n",
+		1:  "--header=主選單 > 帳號設定\n數字鍵直接選 · ESC 回上一層\n",
+		4:  "\nEnter 確認 · ESC 取消\n",
+		10: "\n打字搜尋，或直接輸入對話 ID · ESC 回上一層\n",
 	}
 	for i, hint := range want {
 		if argv := callFile(t, calls, fmt.Sprintf("argv-%d", i)); !strings.Contains(argv, hint) {
@@ -2002,5 +2011,131 @@ func TestHandoffWithATooShortTypedIDReopensTheSessionPicker(t *testing.T) {
 	}
 	if argv := callFile(t, calls, "argv-3"); !strings.Contains(argv, crumbSession) {
 		t.Fatalf("expected the session picker to reopen, got argv: %s", argv)
+	}
+}
+
+func TestAccountSettingsGroupsItsActionsIntoFourEntries(t *testing.T) {
+	home := t.TempDir()
+	runWithFakePath(t, home)
+	claudeHome := filepath.Join(home, ".claude")
+	codexHome := filepath.Join(home, ".codex")
+	os.MkdirAll(claudeHome, 0o755)
+	os.MkdirAll(codexHome, 0o755)
+	registryPath := filepath.Join(home, "accounts.json")
+	writeRegistry(t, registryPath, claudeHome, codexHome)
+
+	calls := fakeFzf(t, home, key("accounts"), key("sync"), cancel(), cancel(), cancel())
+	if _, stderr, err := runMenu(t, registryPath, home, ""); err != nil {
+		t.Fatalf("menu run failed: %v\nstderr: %s", err, stderr)
+	}
+
+	rows := strings.Split(strings.TrimSpace(callFile(t, calls, "rows-1")), "\n")
+	want := []string{"add\t1. 新增帳號", "manage\t2. 管理帳號", "sync\t3. 跨帳號同步", "usage-dir\t4. 用量資料目錄"}
+	if strings.Join(rows, "|") != strings.Join(want, "|") {
+		t.Fatalf("expected 帳號設定 to list %v, got %v", want, rows)
+	}
+	// ESC in 跨帳號同步 steps back to 帳號設定, not out of it.
+	if argv := callFile(t, calls, "argv-3"); !strings.Contains(argv, "--header=主選單 > 帳號設定\n") {
+		t.Fatalf("expected ESC in 跨帳號同步 to return to 帳號設定, got argv: %s", argv)
+	}
+}
+
+// existingAccountHome sets up a registered first Claude account with its own
+// settings.json, plus an unregistered ~/.claude-3 that was already used and
+// so has a settings.json of its own.
+func existingAccountHome(t *testing.T) (home, registryPath, sourceHome, existingHome, launched string) {
+	t.Helper()
+	home = t.TempDir()
+	runWithFakePath(t, home)
+	sourceHome = filepath.Join(home, ".claude")
+	codexHome := filepath.Join(home, ".codex")
+	existingHome = filepath.Join(home, ".claude-3")
+	for _, dir := range []string{sourceHome, codexHome, existingHome} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(filepath.Join(sourceHome, "settings.json"), []byte(`{"shared":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(existingHome, "settings.json"), []byte(`{"own":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	registryPath = filepath.Join(home, "accounts.json")
+	writeRegistry(t, registryPath, sourceHome, codexHome)
+	launched = filepath.Join(home, "claude-launched")
+	writeScript(t, filepath.Join(home, "bin", "claude"), fmt.Sprintf("#!/usr/bin/env bash\ntouch %q\n", launched))
+	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
+	return home, registryPath, sourceHome, existingHome, launched
+}
+
+// An existing account directory was usually logged in already, and has
+// settings of its own. Adding it registers it and offers the shared
+// settings, replacing its own entries only after moving them aside.
+func TestAddingAnExistingDirectorySharesSettingsAndBacksUpItsOwn(t *testing.T) {
+	home, registryPath, sourceHome, existingHome, launched := existingAccountHome(t)
+	calls := fakeFzf(t, home,
+		key("accounts"), key("add"), key("claude"), key("existing|"+existingHome), typed(""), key("share"),
+		cancel(), cancel())
+
+	stdout, stderr, err := runMenu(t, registryPath, home, "")
+	if err != nil {
+		t.Fatalf("menu run failed: %v\nstderr: %s", err, stderr)
+	}
+
+	dirs := strings.Split(strings.TrimSpace(callFile(t, calls, "rows-3")), "\n")
+	if len(dirs) != 2 || !strings.HasPrefix(dirs[0], "existing|"+existingHome+"\t") || !strings.HasPrefix(dirs[1], "new\t") {
+		t.Fatalf("expected the found directory first and a new one last, got %v", dirs)
+	}
+	shareRows := strings.Split(strings.TrimSpace(callFile(t, calls, "rows-5")), "\n")
+	if len(shareRows) != 2 || !strings.HasPrefix(shareRows[0], "own\t") || !strings.Contains(shareRows[1], "原本的設定會備份") {
+		t.Fatalf("expected keeping first and the share row to mention the backup, got %v", shareRows)
+	}
+	link, err := os.Readlink(filepath.Join(existingHome, "settings.json"))
+	if err != nil || link != filepath.Join(sourceHome, "settings.json") {
+		t.Fatalf("expected settings.json to link to the first account, got %q (%v)", link, err)
+	}
+	backups, _ := filepath.Glob(filepath.Join(existingHome, "settings.json.bak-*"))
+	if len(backups) != 1 {
+		t.Fatalf("expected the account's own settings.json to be backed up, got %v", backups)
+	}
+	if raw, _ := os.ReadFile(backups[0]); string(raw) != `{"own":true}` {
+		t.Fatalf("expected the backup to hold the account's own settings, got %q", raw)
+	}
+	if !strings.Contains(stdout, "已匯入「Claude · 2」") || !strings.Contains(stdout, "已備份到 "+backups[0]) {
+		t.Fatalf("expected the import and the backup path to be reported, got: %s", stdout)
+	}
+	if _, err := os.Stat(launched); err == nil {
+		t.Fatal("expected an existing directory not to launch the CLI")
+	}
+	if argv := callFile(t, calls, "argv-6"); !strings.Contains(argv, "--header=主選單 > 帳號設定\n") {
+		t.Fatalf("expected to return to 帳號設定, got argv: %s", argv)
+	}
+}
+
+func TestAddingAnExistingDirectoryCanKeepItsOwnSettings(t *testing.T) {
+	home, registryPath, _, existingHome, launched := existingAccountHome(t)
+	fakeFzf(t, home,
+		key("accounts"), key("add"), key("claude"), key("existing|"+existingHome), typed(""), key("own"),
+		cancel(), cancel())
+
+	if _, stderr, err := runMenu(t, registryPath, home, ""); err != nil {
+		t.Fatalf("menu run failed: %v\nstderr: %s", err, stderr)
+	}
+
+	info, err := os.Lstat(filepath.Join(existingHome, "settings.json"))
+	if err != nil || info.Mode()&os.ModeSymlink != 0 {
+		t.Fatalf("expected the account to keep its own settings.json: %v %v", info, err)
+	}
+	r, err := registry.Load(registryPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	account, err := registry.FindAccount(r, "claude-2")
+	if err != nil || account.Home != existingHome {
+		t.Fatalf("expected the directory to be registered as claude-2: %+v %v", account, err)
+	}
+	if _, err := os.Stat(launched); err == nil {
+		t.Fatal("expected an existing directory not to launch the CLI")
 	}
 }

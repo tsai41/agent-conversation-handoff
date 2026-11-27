@@ -703,25 +703,37 @@ func chooseRegisteredAccount(r registry.Registry, crumbs, prompt string) (string
 	return pickKey(candidates, crumbs, prompt, true)
 }
 
-// offerSharedSettings asks whether a brand-new account should read the same
-// settings as the first account of its provider. Declining leaves an empty
-// home, which is a real choice, so this asks rather than decides. Each
+// offerSharedSettings asks whether an account just added should read the
+// same settings as the first account of its provider. Declining is a real
+// choice, so this asks rather than decides. A brand-new home has nothing of
+// its own yet; an existing home that was imported does, so replace moves
+// each of its entries aside, named in the report, before linking. Each
 // shared entry is reported on its own; one entry failing to link does not
-// hide the others, and the login matters more than any of them.
-func offerSharedSettings(r registry.Registry, account registry.Account, crumbs string) {
+// hide the others.
+func offerSharedSettings(r registry.Registry, account registry.Account, crumbs string, replace bool) {
 	source, found := registry.PrimaryAccount(r, account.Provider)
 	if !found || source.ID == account.ID {
 		return
 	}
 	labels := accountLabels(r)
-	choice, err := pickKey([]kv{
+	options := []kv{
 		{"share", fmt.Sprintf("共用「%s」的設定", labels[source.ID])},
 		{"own", "這個帳號自己一份設定"},
-	}, crumbs, "新帳號的設定：", true)
+	}
+	prompt := "新帳號的設定："
+	if replace {
+		// Keeping comes first: sharing replaces what the account has.
+		options = []kv{
+			{"own", "保留這個帳號自己的設定"},
+			{"share", fmt.Sprintf("共用「%s」的設定（原本的設定會備份）", labels[source.ID])},
+		}
+		prompt = "匯入帳號的設定："
+	}
+	choice, err := pickKey(options, crumbs, prompt, true)
 	if err != nil || choice != "share" {
 		return
 	}
-	shares, err := registry.ShareSettings(source, account, false)
+	shares, err := registry.ShareSettings(source, account, replace)
 	if err != nil {
 		fmt.Printf("提醒：未能共用「%s」的設定：%s\n", labels[source.ID], err)
 		return
@@ -814,22 +826,17 @@ func shareAllAccountSettings(r registry.Registry) {
 	}
 }
 
+// manageAccounts is 帳號設定: four entries grouped by what they act on. Each
+// entry returns errCancelled when backed out of, which lands back here.
 func manageAccounts(registryPath string) error {
 	crumbs := breadcrumb(crumbAccounts)
+	actions := []kv{
+		{"add", "新增帳號"},
+		{"manage", "管理帳號"},
+		{"sync", "跨帳號同步"},
+		{"usage-dir", "用量資料目錄"},
+	}
 	for {
-		// Grouped by what they act on: adding accounts, one account,
-		// every account, then ach's own setting.
-		actions := []kv{
-			{"add", "新增帳號"},
-			{"import", "匯入既有帳號目錄"},
-			{"login", "登入／重新登入"},
-			{"rename", "修改 alias"},
-			{"archive", "封存／解除封存帳號"},
-			{"remove", "從 ach 移除帳號"},
-			{"share", "讓所有帳號共用設定"},
-			{"trust", "同步專案信任到其他帳號"},
-			{"usage-dir", "設定用量資料目錄"},
-		}
 		action, err := pickKey(actions, crumbs, "選擇動作：", true)
 		if err != nil {
 			if errors.Is(err, errCancelled) {
@@ -840,62 +847,224 @@ func manageAccounts(registryPath string) error {
 		actionCrumbs := breadcrumb(crumbAccounts, labelOf(actions, action))
 		switch action {
 		case "add":
-			var providers []kv
-			for _, entry := range []struct{ id, cmd string }{{"claude", "claude"}, {"codex", "codex"}} {
-				if _, err := exec.LookPath(entry.cmd); err == nil {
-					providers = append(providers, kv{entry.id, registry.ProviderNames[entry.id]})
+			err = addAccount(registryPath, actionCrumbs)
+		case "manage":
+			err = manageRegisteredAccounts(registryPath, actionCrumbs)
+		case "sync":
+			err = syncAcrossAccounts(registryPath, actionCrumbs)
+		case "usage-dir":
+			err = setUsageDir(registryPath, actionCrumbs)
+		}
+		if err != nil && !errors.Is(err, errCancelled) {
+			return err
+		}
+	}
+}
+
+// addAccount registers an account, either in a new home or in an existing
+// one found on disk. A new home ends in its CLI, which logs it in; an
+// existing home is usually already logged in, so it is only registered and
+// offered the shared settings.
+func addAccount(registryPath, crumbs string) error {
+	var providers []kv
+	for _, entry := range []struct{ id, cmd string }{{"claude", "claude"}, {"codex", "codex"}} {
+		if _, err := exec.LookPath(entry.cmd); err == nil {
+			providers = append(providers, kv{entry.id, registry.ProviderNames[entry.id]})
+		}
+	}
+	if len(providers) == 0 {
+		fmt.Println("提醒：沒有安裝 claude 或 codex CLI，無法新增帳號。")
+		return nil
+	}
+	chosenProvider, err := pickKey(providers, crumbs, "選擇 provider：", true)
+	if err != nil {
+		return err
+	}
+	newHome, err := registry.SuggestAccountHome(registryPath, chosenProvider)
+	if err != nil {
+		return err
+	}
+	discovered, err := registry.Discover(registryPath)
+	if err != nil {
+		return err
+	}
+	var options []kv
+	for _, d := range discovered {
+		if d.Provider == chosenProvider {
+			options = append(options, kv{"existing|" + d.Home, "使用既有目錄：" + d.Home})
+		}
+	}
+
+	home := newHome
+	existing := false
+	if len(options) == 0 {
+		confirmation, err := pickKey([]kv{
+			{"confirm", fmt.Sprintf("建立帳號目錄：%s", newHome)},
+			{"cancel", "取消"},
+		}, crumbs, "確認新增帳號：", true)
+		if err != nil {
+			return err
+		}
+		if confirmation != "confirm" {
+			return nil
+		}
+	} else {
+		options = append(options, kv{"new", "建立新目錄：" + newHome})
+		selected, err := pickKey(options, crumbs, "選擇帳號目錄：", true)
+		if err != nil {
+			return err
+		}
+		if found, ok := strings.CutPrefix(selected, "existing|"); ok {
+			home, existing = found, true
+		}
+	}
+
+	alias, err := readOptionalAlias(crumbs, "")
+	if err != nil {
+		return err
+	}
+	account, err := registry.AddAccount(registryPath, chosenProvider, home, alias)
+	if err != nil {
+		warn(err)
+		return nil
+	}
+	// The registry has to be reloaded: the account being offered a share
+	// was only just added to it.
+	updated, loadErr := registry.Load(registryPath)
+	if existing {
+		if loadErr == nil {
+			fmt.Printf("已匯入「%s」：%s\n", accountLabels(updated)[account.ID], account.Home)
+			offerSharedSettings(updated, account, crumbs, true)
+		}
+		return nil
+	}
+	if loadErr == nil {
+		offerSharedSettings(updated, account, crumbs, false)
+	}
+	// The interactive CLI, not the login subcommand: a brand new account
+	// home has no onboarding state, so the CLI asks to log in on its first
+	// run whatever the login subcommand already stored. Logging in there is
+	// the same login, minus the second one.
+	return provider.LaunchSession(account)
+}
+
+// manageRegisteredAccounts picks an account, then acts on it. Backing out of
+// an account's actions, or removing it, returns to the account picker.
+func manageRegisteredAccounts(registryPath, crumbs string) error {
+	for {
+		r, err := registry.Load(registryPath)
+		if err != nil {
+			return err
+		}
+		accountID, err := chooseRegisteredAccount(r, crumbs, "選擇帳號：")
+		if err != nil {
+			return err
+		}
+		if err := manageOneAccount(registryPath, accountID, crumbs); err != nil && !errors.Is(err, errCancelled) {
+			return err
+		}
+	}
+}
+
+// manageOneAccount is the action list for one account. It stays open after
+// an action so several can be done in a row, and returns nil once the
+// account is removed, errCancelled when backed out of.
+func manageOneAccount(registryPath, accountID, parentCrumbs string) error {
+	for {
+		r, err := registry.Load(registryPath)
+		if err != nil {
+			return err
+		}
+		account, err := registry.FindAccount(r, accountID)
+		if err != nil {
+			return err
+		}
+		label := accountLabels(r)[accountID]
+		crumbs := parentCrumbs + " > " + label
+		archiveLabel := "封存"
+		if account.Archived {
+			archiveLabel = "解除封存"
+		}
+		actions := []kv{
+			{"login", "登入／重新登入"},
+			{"rename", "修改 alias"},
+			{"archive", archiveLabel},
+			{"remove", "從 ach 移除"},
+		}
+		action, err := pickKey(actions, crumbs, "選擇動作：", true)
+		if err != nil {
+			return err
+		}
+		actionCrumbs := crumbs + " > " + labelOf(actions, action)
+		switch action {
+		case "login":
+			return provider.Login(account)
+		case "rename":
+			alias, err := readOptionalAlias(actionCrumbs, "新的 alias（留空即清除）：")
+			if err != nil {
+				if errors.Is(err, errCancelled) {
+					continue
 				}
+				return err
 			}
-			if len(providers) == 0 {
-				fmt.Println("提醒：沒有安裝 claude 或 codex CLI，無法新增帳號。")
+			if err := registry.RenameAccount(registryPath, accountID, alias); err != nil {
+				warn(err)
 				continue
 			}
-			chosenProvider, err := pickKey(providers, actionCrumbs, "選擇 provider：", true)
+			fmt.Printf("已更新「%s」的 alias。\n", label)
+		case "archive":
+			archived, err := registry.ToggleArchived(registryPath, accountID)
 			if err != nil {
-				if errors.Is(err, errCancelled) {
-					continue
-				}
-				return err
+				warn(err)
+				continue
 			}
-			accountHome, err := registry.SuggestAccountHome(registryPath, chosenProvider)
-			if err != nil {
-				return err
+			if archived {
+				fmt.Printf("已封存「%s」，資料與對話紀錄都沒動。\n", label)
+				continue
 			}
+			if updated, err := registry.Load(registryPath); err == nil {
+				label = accountLabels(updated)[accountID]
+			}
+			fmt.Printf("已解除封存「%s」。\n", label)
+		case "remove":
+			// 取消 comes first so a reflex Enter or 1 changes nothing.
 			confirmation, err := pickKey([]kv{
-				{"confirm", fmt.Sprintf("建立帳號目錄：%s", accountHome)},
 				{"cancel", "取消"},
-			}, actionCrumbs, "確認新增帳號：", true)
+				{"confirm", fmt.Sprintf("只從 ach 移除「%s」，保留所有帳號資料", label)},
+			}, actionCrumbs, "確認移除帳號：", true)
 			if err != nil {
 				if errors.Is(err, errCancelled) {
 					continue
 				}
 				return err
 			}
-			if confirmation == "confirm" {
-				alias, err := readOptionalAlias(actionCrumbs, "")
-				if err != nil {
-					if errors.Is(err, errCancelled) {
-						continue
-					}
-					return err
-				}
-				account, err := registry.AddAccount(registryPath, chosenProvider, accountHome, alias)
-				if err != nil {
-					warn(err)
-					continue
-				}
-				// The registry has to be reloaded: the account being
-				// offered a share was only just added to it.
-				if updated, loadErr := registry.Load(registryPath); loadErr == nil {
-					offerSharedSettings(updated, account, actionCrumbs)
-				}
-				// The interactive CLI, not the login subcommand: a brand
-				// new account home has no onboarding state, so the CLI
-				// asks to log in on its first run whatever the login
-				// subcommand already stored. Logging in there is the same
-				// login, minus the second one.
-				return provider.LaunchSession(account)
+			if confirmation != "confirm" {
+				continue
 			}
+			if err := registry.RemoveAccount(registryPath, accountID); err != nil {
+				warn(err)
+				continue
+			}
+			fmt.Printf("已移除「%s」，帳號資料保留在 %s。\n", label, account.Home)
+			return nil
+		}
+	}
+}
+
+// syncAcrossAccounts is 跨帳號同步: what one account has, carried to the
+// others.
+func syncAcrossAccounts(registryPath, crumbs string) error {
+	actions := []kv{
+		{"share", "讓所有帳號共用設定"},
+		{"trust", "同步專案信任到其他帳號"},
+	}
+	for {
+		action, err := pickKey(actions, crumbs, "選擇動作：", true)
+		if err != nil {
+			return err
+		}
+		actionCrumbs := crumbs + " > " + labelOf(actions, action)
+		switch action {
 		case "share":
 			r, err := registry.Load(registryPath)
 			if err != nil {
@@ -915,172 +1084,30 @@ func manageAccounts(registryPath string) error {
 			if confirmation == "confirm" {
 				shareAllAccountSettings(r)
 			}
-		case "rename":
-			r, err := registry.Load(registryPath)
-			if err != nil {
-				return err
-			}
-			accountID, err := chooseRegisteredAccount(r, actionCrumbs, "選擇要修改 alias 的帳號：")
-			if err != nil {
-				if errors.Is(err, errCancelled) {
-					continue
-				}
-				return err
-			}
-			alias, err := readOptionalAlias(actionCrumbs, "新的 alias（留空即清除）：")
-			if err != nil {
-				if errors.Is(err, errCancelled) {
-					continue
-				}
-				return err
-			}
-			if err := registry.RenameAccount(registryPath, accountID, alias); err != nil {
-				warn(err)
-				continue
-			}
-			fmt.Printf("已更新「%s」的 alias。\n", accountLabels(r)[accountID])
-		case "login":
-			r, err := registry.Load(registryPath)
-			if err != nil {
-				return err
-			}
-			accountID, err := chooseRegisteredAccount(r, actionCrumbs, "選擇要登入的帳號：")
-			if err != nil {
-				if errors.Is(err, errCancelled) {
-					continue
-				}
-				return err
-			}
-			account, err := registry.FindAccount(r, accountID)
-			if err != nil {
-				return err
-			}
-			return provider.Login(account)
-		case "import":
-			candidates, err := registry.Discover(registryPath)
-			if err != nil {
-				return err
-			}
-			if len(candidates) == 0 {
-				fmt.Println("沒有可匯入的既有帳號目錄。")
-				continue
-			}
-			options := make([]kv, len(candidates))
-			for i, c := range candidates {
-				options[i] = kv{c.Provider + "|" + c.Home, fmt.Sprintf("%s：%s", registry.ProviderNames[c.Provider], c.Home)}
-			}
-			selected, err := pickKey(options, actionCrumbs, "選擇要匯入的帳號目錄：", true)
-			if err != nil {
-				if errors.Is(err, errCancelled) {
-					continue
-				}
-				return err
-			}
-			parts := strings.SplitN(selected, "|", 2)
-			alias, err := readOptionalAlias(actionCrumbs, "")
-			if err != nil {
-				if errors.Is(err, errCancelled) {
-					continue
-				}
-				return err
-			}
-			imported, err := registry.AddAccount(registryPath, parts[0], parts[1], alias)
-			if err != nil {
-				warn(err)
-				continue
-			}
-			label := imported.ID
-			if updated, loadErr := registry.Load(registryPath); loadErr == nil {
-				label = accountLabels(updated)[imported.ID]
-			}
-			fmt.Printf("已匯入「%s」：%s\n", label, imported.Home)
-		case "archive":
-			r, err := registry.Load(registryPath)
-			if err != nil {
-				return err
-			}
-			accountID, err := chooseRegisteredAccount(r, actionCrumbs, "選擇要封存或解除封存的帳號：")
-			if err != nil {
-				if errors.Is(err, errCancelled) {
-					continue
-				}
-				return err
-			}
-			archived, err := registry.ToggleArchived(registryPath, accountID)
-			if err != nil {
-				warn(err)
-				continue
-			}
-			if archived {
-				fmt.Printf("已封存「%s」，資料與對話紀錄都沒動。\n", accountLabels(r)[accountID])
-				continue
-			}
-			updated, err := registry.Load(registryPath)
-			if err != nil {
-				return err
-			}
-			fmt.Printf("已解除封存「%s」。\n", accountLabels(updated)[accountID])
-		case "remove":
-			r, err := registry.Load(registryPath)
-			if err != nil {
-				return err
-			}
-			accountID, err := chooseRegisteredAccount(r, actionCrumbs, "選擇要移除的帳號：")
-			if err != nil {
-				if errors.Is(err, errCancelled) {
-					continue
-				}
-				return err
-			}
-			account, err := registry.FindAccount(r, accountID)
-			if err != nil {
-				return err
-			}
-			label := accountLabels(r)[accountID]
-			confirmation, err := pickKey([]kv{
-				{"cancel", "取消"},
-				{"confirm", fmt.Sprintf("只從 ach 移除「%s」，保留所有帳號資料", label)},
-			}, actionCrumbs, "確認移除帳號：", true)
-			if err != nil {
-				if errors.Is(err, errCancelled) {
-					continue
-				}
-				return err
-			}
-			if confirmation == "confirm" {
-				if err := registry.RemoveAccount(registryPath, accountID); err != nil {
-					warn(err)
-					continue
-				}
-				fmt.Printf("已移除「%s」，帳號資料保留在 %s。\n", label, account.Home)
-			}
-		case "usage-dir":
-			input, err := readOptionalAlias(actionCrumbs, "新的用量資料目錄（留空即清除，改用預設路徑）：")
-			if err != nil {
-				if errors.Is(err, errCancelled) {
-					continue
-				}
-				return err
-			}
-			resolved, err := registry.SetUsageDir(registryPath, input)
-			if err != nil {
-				warn(err)
-				continue
-			}
-			if resolved == "" {
-				fmt.Println("用量資料目錄已清除，將使用預設路徑。")
-			} else {
-				fmt.Printf("用量資料目錄已設定為：%s\n", resolved)
-			}
 		case "trust":
-			if err := manageTrustSync(registryPath, actionCrumbs); err != nil {
-				if errors.Is(err, errCancelled) {
-					continue
-				}
+			if err := manageTrustSync(registryPath, actionCrumbs); err != nil && !errors.Is(err, errCancelled) {
 				return err
 			}
 		}
 	}
+}
+
+func setUsageDir(registryPath, crumbs string) error {
+	input, err := readOptionalAlias(crumbs, "新的用量資料目錄（留空即清除，改用預設路徑）：")
+	if err != nil {
+		return err
+	}
+	resolved, err := registry.SetUsageDir(registryPath, input)
+	if err != nil {
+		warn(err)
+		return nil
+	}
+	if resolved == "" {
+		fmt.Println("用量資料目錄已清除，將使用預設路徑。")
+	} else {
+		fmt.Printf("用量資料目錄已設定為：%s\n", resolved)
+	}
+	return nil
 }
 
 func manageTrustSync(registryPath, crumbs string) error {
