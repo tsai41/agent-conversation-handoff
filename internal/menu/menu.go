@@ -28,6 +28,17 @@ type kv struct{ Key, Label string }
 // erroring out.
 var errCancelled = errors.New("selection cancelled")
 
+// errNoMatch marks a typed conversation id that matched nothing. It is a
+// typo to retry, so the picker it came from reopens instead of the run
+// ending.
+var errNoMatch = errors.New("no conversation matches id")
+
+// warn reports a failed action the user can correct and retry from the same
+// menu, which stays open.
+func warn(err error) {
+	fmt.Printf("提醒: %v\n", err)
+}
+
 // Breadcrumb segments for the levels below the root. Each level is named
 // once here so the path bar cannot drift from the menu row leading to it.
 const (
@@ -179,7 +190,7 @@ func pickSessionRow(candidates []session.Candidate, crumbs, prompt string) (stri
 		return "", err
 	}
 	if path == "" {
-		return "", fmt.Errorf("no conversation selected")
+		return "", errCancelled
 	}
 	return path, nil
 }
@@ -366,8 +377,11 @@ func interactiveRegistryHandoff(registryPath, project string) error {
 			}
 			if sessionPath == "" {
 				if err := manualIDHandoff(registryPath, r, labels, typed, project); err != nil {
+					if errors.Is(err, errNoMatch) {
+						warn(err)
+						continue
+					}
 					if errors.Is(err, errCancelled) {
-						step = stepSession
 						continue
 					}
 					return err
@@ -498,9 +512,9 @@ func manualIDHandoff(registryPath string, r registry.Registry, labels map[string
 	}
 	if len(hits) == 0 {
 		if len(lookupErrors) > 0 {
-			return fmt.Errorf("no conversation matches id %s; some accounts could not be searched (%s)", fragment, strings.Join(lookupErrors, "; "))
+			return fmt.Errorf("%w %s; some accounts could not be searched (%s)", errNoMatch, fragment, strings.Join(lookupErrors, "; "))
 		}
-		return fmt.Errorf("no conversation matches id: %s", fragment)
+		return fmt.Errorf("%w: %s", errNoMatch, fragment)
 	}
 
 	chosen := hits[0]
@@ -756,7 +770,8 @@ func manageAccounts(registryPath string) error {
 				}
 			}
 			if len(providers) == 0 {
-				return fmt.Errorf("no provider CLI is installed")
+				warn(fmt.Errorf("no provider CLI is installed"))
+				continue
 			}
 			chosenProvider, err := pickKey(providers, actionCrumbs, "選擇 provider: ", true)
 			if err != nil {
@@ -789,7 +804,8 @@ func manageAccounts(registryPath string) error {
 				}
 				account, err := registry.AddAccount(registryPath, chosenProvider, accountHome, alias)
 				if err != nil {
-					return err
+					warn(err)
+					continue
 				}
 				// The registry has to be reloaded: the account being
 				// offered a share was only just added to it.
@@ -841,7 +857,8 @@ func manageAccounts(registryPath string) error {
 				return err
 			}
 			if err := registry.RenameAccount(registryPath, accountID, alias); err != nil {
-				return err
+				warn(err)
+				continue
 			}
 		case "login":
 			r, err := registry.Load(registryPath)
@@ -889,7 +906,8 @@ func manageAccounts(registryPath string) error {
 				return err
 			}
 			if _, err := registry.AddAccount(registryPath, parts[0], parts[1], alias); err != nil {
-				return err
+				warn(err)
+				continue
 			}
 		case "archive":
 			r, err := registry.Load(registryPath)
@@ -905,7 +923,8 @@ func manageAccounts(registryPath string) error {
 			}
 			archived, err := registry.ToggleArchived(registryPath, accountID)
 			if err != nil {
-				return err
+				warn(err)
+				continue
 			}
 			if archived {
 				fmt.Printf("已封存「%s」，資料與對話紀錄都沒動。\n", accountLabels(r)[accountID])
@@ -940,7 +959,8 @@ func manageAccounts(registryPath string) error {
 			}
 			if confirmation == "confirm" {
 				if err := registry.RemoveAccount(registryPath, accountID); err != nil {
-					return err
+					warn(err)
+					continue
 				}
 			}
 		case "usage-dir":
@@ -953,7 +973,8 @@ func manageAccounts(registryPath string) error {
 			}
 			resolved, err := registry.SetUsageDir(registryPath, input)
 			if err != nil {
-				return err
+				warn(err)
+				continue
 			}
 			if resolved == "" {
 				fmt.Println("用量資料目錄已清除，將使用預設路徑。")
@@ -1101,7 +1122,7 @@ func launchAccount(registryPath string) error {
 		return err
 	}
 	if len(matches) == 0 {
-		return fmt.Errorf("no conversation matches id: %s", typed)
+		return fmt.Errorf("%w: %s", errNoMatch, typed)
 	}
 	if len(matches) == 1 {
 		return provider.ResumeSession(account, matches[0].SessionID, matches[0].CWD)

@@ -1639,3 +1639,63 @@ func TestEveryAccountPickerListsAccountsInTheSameOrder(t *testing.T) {
 		}
 	}
 }
+
+func TestHandoffWithAnUnmatchedTypedIDReopensTheSessionPicker(t *testing.T) {
+	home := t.TempDir()
+	runWithFakePath(t, home)
+	project := filepath.Join(home, "project")
+	claudeHome := filepath.Join(home, ".claude")
+	codexHome := filepath.Join(home, ".codex")
+	for _, dir := range []string{project, claudeHome, codexHome} {
+		os.MkdirAll(dir, 0o755)
+	}
+	registryPath := filepath.Join(home, "accounts.json")
+	writeRegistry(t, registryPath, claudeHome, codexHome)
+	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
+	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
+
+	calls := fakeFzf(t, home, key("handoff"), key("claude-1"), typed("zzzzzzzz"), cancel(), cancel(), cancel())
+
+	stdout, stderr, err := runMenu(t, registryPath, project, "")
+	if err != nil {
+		t.Fatalf("expected a mistyped id not to end the run: %v\nstderr: %s", err, stderr)
+	}
+	if !strings.Contains(stdout, "提醒: no conversation matches id: zzzzzzzz") {
+		t.Fatalf("expected the unmatched id to be reported, got: %s", stdout)
+	}
+	if argv := callFile(t, calls, "argv-3"); !strings.Contains(argv, crumbSession) {
+		t.Fatalf("expected the session picker to reopen after the unmatched id, got argv: %s", argv)
+	}
+}
+
+func TestManageAccountsStaysOpenWhenAnActionFails(t *testing.T) {
+	home := t.TempDir()
+	runWithFakePath(t, home)
+	claudeHome := filepath.Join(home, ".claude")
+	codexHome := filepath.Join(home, ".codex")
+	os.MkdirAll(claudeHome, 0o755)
+	os.MkdirAll(codexHome, 0o755)
+	registryDir := filepath.Join(home, "registry")
+	os.MkdirAll(registryDir, 0o755)
+	registryPath := filepath.Join(registryDir, "accounts.json")
+	writeRegistry(t, registryPath, claudeHome, codexHome)
+	// A read-only registry directory makes the lock file, and so the write,
+	// fail while the registry itself stays readable.
+	if err := os.Chmod(registryDir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { os.Chmod(registryDir, 0o755) })
+
+	calls := fakeFzf(t, home, key("accounts"), key("usage-dir"), typed(filepath.Join(home, "usage")), cancel(), cancel())
+
+	stdout, stderr, err := runMenu(t, registryPath, home, "")
+	if err != nil {
+		t.Fatalf("expected a failed write not to end the run: %v\nstderr: %s", err, stderr)
+	}
+	if !strings.Contains(stdout, "提醒: ") {
+		t.Fatalf("expected the failure to be reported, got: %s", stdout)
+	}
+	if argv := callFile(t, calls, "argv-3"); !strings.Contains(argv, "--prompt=選擇動作: ") {
+		t.Fatalf("expected 帳號設定 to reopen after the failure, got argv: %s", argv)
+	}
+}
