@@ -1319,7 +1319,7 @@ func TestManageAccountsTrustFillsAndReportsField(t *testing.T) {
 
 // A codex source must be refused before any file is touched, with no
 // confirmation step offered.
-func TestManageAccountsTrustRefusesCodexSourceWithoutTouchingFiles(t *testing.T) {
+func TestManageAccountsTrustWithOneClaudeAccountExplainsAndTouchesNothing(t *testing.T) {
 	home := t.TempDir()
 	runWithFakePath(t, home)
 
@@ -1335,7 +1335,7 @@ func TestManageAccountsTrustRefusesCodexSourceWithoutTouchingFiles(t *testing.T)
 	registryPath := filepath.Join(home, "accounts.json")
 	writeRegistry(t, registryPath, claudeHome, codexHome)
 
-	fakeFzf(t, home, key("accounts"), key("trust"), key("codex-1"), cancel(), key("chat"), key("claude-1"), key("new"))
+	calls := fakeFzf(t, home, key("accounts"), key("trust"), cancel(), cancel())
 	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
 	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
 
@@ -1343,24 +1343,70 @@ func TestManageAccountsTrustRefusesCodexSourceWithoutTouchingFiles(t *testing.T)
 	if err != nil {
 		t.Fatalf("menu run failed: %v\nstderr: %s", err, stderr)
 	}
-	if !strings.Contains(stdout, "只有 Claude 帳號") {
-		t.Fatalf("expected a refusal explaining only claude accounts have this state, got: %s", stdout)
+	if !strings.Contains(stdout, "沒有其他 Claude 帳號可以同步") {
+		t.Fatalf("expected an explanation that there is nothing to sync, got: %s", stdout)
+	}
+	if argv := callFile(t, calls, "argv-2"); !strings.Contains(argv, "--prompt=選擇動作: ") {
+		t.Fatalf("expected 帳號設定 to reopen without a source picker, got argv: %s", argv)
 	}
 	raw, err := os.ReadFile(filepath.Join(claudeHome, ".claude.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(raw) != claudeJSON {
-		t.Fatal("a refused trust sync modified the claude account's .claude.json")
+		t.Fatal("a trust sync with nothing to sync modified the claude account's .claude.json")
 	}
-	entries, err := os.ReadDir(claudeHome)
-	if err != nil {
-		t.Fatal(err)
+}
+
+func TestManageAccountsTrustOffersOnlyClaudeSources(t *testing.T) {
+	home := t.TempDir()
+	runWithFakePath(t, home)
+	claude1Home := filepath.Join(home, ".claude")
+	claude2Home := filepath.Join(home, ".claude-2")
+	codexHome := filepath.Join(home, ".codex")
+	for _, dir := range []string{claude1Home, claude2Home, codexHome} {
+		os.MkdirAll(dir, 0o755)
 	}
-	for _, e := range entries {
-		if strings.Contains(e.Name(), ".bak-") {
-			t.Fatalf("expected no backup file, found %s", e.Name())
-		}
+	registryPath := filepath.Join(home, "accounts.json")
+	writeRegistryTwoClaudeAccounts(t, registryPath, claude1Home, claude2Home, codexHome)
+
+	calls := fakeFzf(t, home, key("accounts"), key("trust"), cancel(), cancel(), cancel())
+
+	if _, stderr, err := runMenu(t, registryPath, home, ""); err != nil {
+		t.Fatalf("menu run failed: %v\nstderr: %s", err, stderr)
+	}
+	rows := callFile(t, calls, "rows-2")
+	if strings.Contains(rows, "codex-1") || !strings.Contains(rows, "claude-1") || !strings.Contains(rows, "claude-2") {
+		t.Fatalf("expected only Claude accounts as trust sources, got: %s", rows)
+	}
+}
+
+func TestChatWithASingleUsableAccountSkipsTheAccountPicker(t *testing.T) {
+	home := t.TempDir()
+	runWithFakePath(t, home)
+	claudeHome := filepath.Join(home, ".claude")
+	codexHome := filepath.Join(home, ".codex")
+	os.MkdirAll(claudeHome, 0o755)
+	os.MkdirAll(codexHome, 0o755)
+	registryPath := filepath.Join(home, "accounts.json")
+	writeRegistry(t, registryPath, claudeHome, codexHome)
+	// Only claude is installed, so codex-1 is not offered. PATH is cut down
+	// to the fake bin so a real codex on this machine does not count.
+	fakeBin := filepath.Join(home, "bin")
+	t.Setenv("PATH", fakeBin+string(os.PathListSeparator)+"/usr/bin:/bin")
+	writeScript(t, filepath.Join(fakeBin, "claude"), "#!/usr/bin/env bash\nexit 0\n")
+
+	calls := fakeFzf(t, home, key("chat"), cancel(), cancel())
+
+	if _, stderr, err := runMenu(t, registryPath, home, ""); err != nil {
+		t.Fatalf("menu run failed: %v\nstderr: %s", err, stderr)
+	}
+	argv := callFile(t, calls, "argv-1")
+	if !strings.Contains(argv, "--prompt=選擇對話方式: ") || !strings.Contains(argv, "主選單 > 使用帳號對話 > Claude") {
+		t.Fatalf("expected the new-or-resume step naming the only account, got argv: %s", argv)
+	}
+	if argv := callFile(t, calls, "argv-2"); !strings.Contains(argv, "--prompt=選擇功能: ") {
+		t.Fatalf("expected ESC to return to the root menu, got argv: %s", argv)
 	}
 }
 

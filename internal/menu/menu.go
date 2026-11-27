@@ -742,16 +742,18 @@ func shareAllAccountSettings(r registry.Registry) {
 func manageAccounts(registryPath string) error {
 	crumbs := breadcrumb(crumbAccounts)
 	for {
+		// Grouped by what they act on: adding accounts, one account,
+		// every account, then ach's own setting.
 		actions := []kv{
 			{"add", "新增帳號"},
-			{"rename", "修改 alias"},
+			{"import", "匯入既有帳號目錄"},
 			{"login", "登入／重新登入"},
-			{"share", "共用設定到所有帳號"},
+			{"rename", "修改 alias"},
 			{"archive", "封存／解除封存帳號"},
 			{"remove", "從 ach 移除帳號"},
-			{"import", "匯入既有帳號目錄"},
-			{"usage-dir", "設定用量資料目錄"},
+			{"share", "共用設定到所有帳號"},
 			{"trust", "同步專案信任到其他帳號"},
+			{"usage-dir", "設定用量資料目錄"},
 		}
 		action, err := pickKey(actions, crumbs, "選擇動作: ", true)
 		if err != nil {
@@ -1012,17 +1014,25 @@ func manageTrustSync(registryPath, crumbs string) error {
 		return err
 	}
 	labels := accountLabels(r)
-	sourceID, err := chooseRegisteredAccount(r, crumbs, "選擇來源帳號: ")
+	// Only Claude accounts keep project trust, so only they are offered,
+	// and with fewer than two there is nothing to sync between.
+	var candidates []kv
+	for _, account := range registry.DisplayOrder(r) {
+		if account.Provider == "claude" {
+			candidates = append(candidates, kv{account.ID, labels[account.ID]})
+		}
+	}
+	if len(candidates) < 2 {
+		fmt.Println("沒有其他 Claude 帳號可以同步：專案信任只存在 Claude 帳號裡，至少要有兩個。")
+		return nil
+	}
+	sourceID, err := pickKey(candidates, crumbs, "選擇來源 Claude 帳號: ", true)
 	if err != nil {
 		return err
 	}
 	source, err := registry.FindAccount(r, sourceID)
 	if err != nil {
 		return err
-	}
-	if source.Provider != "claude" {
-		fmt.Println("只有 Claude 帳號有這份專案信任狀態，其他 provider 沒有可同步的內容。")
-		return nil
 	}
 
 	fmt.Println("只補目標帳號缺的專案信任與權限欄位，不覆蓋既有值。")
@@ -1096,6 +1106,16 @@ func launchAccount(registryPath string) error {
 	)
 	step := stepAccount
 	var account registry.Account
+	// With one account there is nothing to choose: start at the
+	// new-or-resume step, and ESC there leaves the flow.
+	single := len(candidates) == 1
+	if single {
+		account, err = registry.FindAccount(r, candidates[0].Key)
+		if err != nil {
+			return err
+		}
+		step = stepMode
+	}
 
 	for {
 		switch step {
@@ -1111,12 +1131,17 @@ func launchAccount(registryPath string) error {
 			step = stepMode
 
 		case stepMode:
+			modeCrumbs := breadcrumb(crumbChat)
+			if single {
+				// The account was not picked, so name it here.
+				modeCrumbs = breadcrumb(crumbChat, labels[account.ID])
+			}
 			action, err := pickKey([]kv{
 				{"new", "新開對話"},
 				{"resume", crumbResume},
-			}, breadcrumb(crumbChat), "選擇對話方式: ", true)
+			}, modeCrumbs, "選擇對話方式: ", true)
 			if err != nil {
-				if errors.Is(err, errCancelled) {
+				if errors.Is(err, errCancelled) && !single {
 					step = stepAccount
 					continue
 				}
