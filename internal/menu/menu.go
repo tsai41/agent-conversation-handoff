@@ -1054,9 +1054,11 @@ func reportTrustSync(label string, result registry.TrustSync) {
 	fmt.Printf("%s: 已補上 %d 個專案、%d 個欄位，原設定已備份到 %s\n", label, result.ProjectsAdded, result.FieldsFilled, result.Backup)
 }
 
-// launchAccount is the second level of the chat flow. provider.LaunchSession
-// execs, so this only returns when the account could not be launched or the
-// user backed out.
+// launchAccount is the chat flow: account -> new or resume -> conversation.
+// Backing out of a step returns to the step before it; ESC at the account
+// picker is the flow's own cancellation, propagated to the caller.
+// provider.LaunchSession and provider.ResumeSession exec, so this only
+// returns when nothing could be launched or the user backed out.
 func launchAccount(registryPath string) error {
 	r, err := registry.Load(registryPath)
 	if err != nil {
@@ -1072,80 +1074,124 @@ func launchAccount(registryPath string) error {
 	if len(candidates) == 0 {
 		return fmt.Errorf("no registered account has its provider CLI installed")
 	}
-	selected, err := pickKey(candidates, breadcrumb(crumbChat), "選擇帳號: ", true)
-	if err != nil {
-		return err
-	}
-	account, err := registry.FindAccount(r, selected)
-	if err != nil {
-		return err
-	}
-	action, err := pickKey([]kv{
-		{"new", "新開對話"},
-		{"resume", crumbResume},
-	}, breadcrumb(crumbChat), "選擇對話方式: ", true)
-	if err != nil {
-		return err
-	}
-	if action == "new" {
-		return provider.LaunchSession(account)
-	}
 
+	const (
+		stepAccount = iota
+		stepMode
+		stepSession
+	)
+	step := stepAccount
+	var account registry.Account
+
+	for {
+		switch step {
+		case stepAccount:
+			selected, err := pickKey(candidates, breadcrumb(crumbChat), "選擇帳號: ", true)
+			if err != nil {
+				return err
+			}
+			account, err = registry.FindAccount(r, selected)
+			if err != nil {
+				return err
+			}
+			step = stepMode
+
+		case stepMode:
+			action, err := pickKey([]kv{
+				{"new", "新開對話"},
+				{"resume", crumbResume},
+			}, breadcrumb(crumbChat), "選擇對話方式: ", true)
+			if err != nil {
+				if errors.Is(err, errCancelled) {
+					step = stepAccount
+					continue
+				}
+				return err
+			}
+			if action == "new" {
+				return provider.LaunchSession(account)
+			}
+			step = stepSession
+
+		case stepSession:
+			if err := resumeAccountSession(account); err != nil {
+				if errors.Is(err, errCancelled) {
+					step = stepMode
+					continue
+				}
+				return err
+			}
+			return nil
+		}
+	}
+}
+
+// resumeAccountSession is the conversation step of the chat flow: a listed
+// conversation, or one found by a typed id anywhere in the account. An id
+// that matches nothing, or ESC in the "several matches" picker, reopens the
+// conversation picker; ESC there returns errCancelled.
+func resumeAccountSession(account registry.Account) error {
 	project, err := os.Getwd()
 	if err != nil {
 		return err
 	}
-	// A project with no conversations of its own is not a dead end: a typed
-	// id still reaches every project.
-	listing, listErr := sessionsForAccount(account, project)
-	crumbs := breadcrumb(crumbChat, crumbResume)
-	if listErr != nil {
-		listing = session.CandidateList{}
-		crumbs = fmt.Sprintf("%s（無法掃描：%v；仍可輸入 ID 搜尋）", crumbs, listErr)
-	} else {
-		crumbs = sessionCountCrumb(crumbs, listing.Total, len(listing.Candidates))
-	}
-	path, typed, err := pickSession(listing.Candidates, crumbs, "搜尋或輸入對話 ID: ")
-	if err != nil {
-		return err
-	}
-	if path != "" {
+	for {
+		// A project with no conversations of its own is not a dead end: a
+		// typed id still reaches every project.
+		listing, listErr := sessionsForAccount(account, project)
+		crumbs := breadcrumb(crumbChat, crumbResume)
+		if listErr != nil {
+			listing = session.CandidateList{}
+			crumbs = fmt.Sprintf("%s（無法掃描：%v；仍可輸入 ID 搜尋）", crumbs, listErr)
+		} else {
+			crumbs = sessionCountCrumb(crumbs, listing.Total, len(listing.Candidates))
+		}
+		path, typed, err := pickSession(listing.Candidates, crumbs, "搜尋或輸入對話 ID: ")
+		if err != nil {
+			return err
+		}
+		if path != "" {
+			sessionID, err := session.ID(path, account.Provider)
+			if err != nil {
+				return err
+			}
+			return provider.ResumeSession(account, sessionID, "")
+		}
+
+		matches, err := findSessionsByID(account, typed)
+		if err != nil {
+			return err
+		}
+		if len(matches) == 0 {
+			warn(fmt.Errorf("%w: %s", errNoMatch, typed))
+			continue
+		}
+		if len(matches) == 1 {
+			return provider.ResumeSession(account, matches[0].SessionID, matches[0].CWD)
+		}
+		resumeCandidates := make([]session.Candidate, len(matches))
+		for i, match := range matches {
+			resumeCandidates[i] = match.Candidate
+		}
+		path, err = pickSessionRow(resumeCandidates, breadcrumb(crumbChat, crumbResume), "多筆符合，選擇要繼續的對話: ")
+		if err != nil {
+			if errors.Is(err, errCancelled) {
+				continue
+			}
+			return err
+		}
 		sessionID, err := session.ID(path, account.Provider)
 		if err != nil {
 			return err
 		}
-		return provider.ResumeSession(account, sessionID, "")
-	}
-
-	matches, err := findSessionsByID(account, typed)
-	if err != nil {
-		return err
-	}
-	if len(matches) == 0 {
-		return fmt.Errorf("%w: %s", errNoMatch, typed)
-	}
-	if len(matches) == 1 {
-		return provider.ResumeSession(account, matches[0].SessionID, matches[0].CWD)
-	}
-	resumeCandidates := make([]session.Candidate, len(matches))
-	for i, match := range matches {
-		resumeCandidates[i] = match.Candidate
-	}
-	path, err = pickSessionRow(resumeCandidates, breadcrumb(crumbChat, crumbResume), "多筆符合，選擇要繼續的對話: ")
-	if err != nil {
-		return err
-	}
-	sessionID, err := session.ID(path, account.Provider)
-	if err != nil {
-		return err
-	}
-	chosen := matches[0]
-	for _, match := range matches {
-		if match.Path == path {
-			chosen = match
+		chosen := matches[0]
+		for _, match := range matches {
+			if match.Path == path {
+				chosen = match
+			}
 		}
+		return provider.ResumeSession(account, sessionID, chosen.CWD)
 	}
-	return provider.ResumeSession(account, sessionID, chosen.CWD)
 }
 
 func findSessionsByID(account registry.Account, fragment string) ([]session.Match, error) {

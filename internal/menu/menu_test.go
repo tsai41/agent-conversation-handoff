@@ -1699,3 +1699,62 @@ func TestManageAccountsStaysOpenWhenAnActionFails(t *testing.T) {
 		t.Fatalf("expected 帳號設定 to reopen after the failure, got argv: %s", argv)
 	}
 }
+
+func TestChatEscStepsBackOneLevelAtATime(t *testing.T) {
+	home := t.TempDir()
+	runWithFakePath(t, home)
+	claudeHome := filepath.Join(home, ".claude")
+	codexHome := filepath.Join(home, ".codex")
+	os.MkdirAll(claudeHome, 0o755)
+	os.MkdirAll(codexHome, 0o755)
+	registryPath := filepath.Join(home, "accounts.json")
+	writeRegistry(t, registryPath, claudeHome, codexHome)
+	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
+	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
+
+	calls := fakeFzf(t, home,
+		key("chat"), key("claude-1"), cancel(),
+		key("claude-1"), key("resume"), cancel(),
+		cancel(), cancel(), cancel())
+
+	if _, stderr, err := runMenu(t, registryPath, home, ""); err != nil {
+		t.Fatalf("menu run failed: %v\nstderr: %s", err, stderr)
+	}
+
+	want := []string{
+		"選擇功能: ", "選擇帳號: ", "選擇對話方式: ",
+		"選擇帳號: ", "選擇對話方式: ", "搜尋或輸入對話 ID: ",
+		"選擇對話方式: ", "選擇帳號: ", "選擇功能: ",
+	}
+	for i, prompt := range want {
+		if argv := callFile(t, calls, fmt.Sprintf("argv-%d", i)); !strings.Contains(argv, "--prompt="+prompt) {
+			t.Fatalf("fzf call %d: expected prompt %q, got argv: %s", i, prompt, argv)
+		}
+	}
+}
+
+func TestChatResumeWithAnUnmatchedTypedIDReopensTheSessionPicker(t *testing.T) {
+	home := t.TempDir()
+	runWithFakePath(t, home)
+	claudeHome := filepath.Join(home, ".claude")
+	codexHome := filepath.Join(home, ".codex")
+	os.MkdirAll(claudeHome, 0o755)
+	os.MkdirAll(codexHome, 0o755)
+	registryPath := filepath.Join(home, "accounts.json")
+	writeRegistry(t, registryPath, claudeHome, codexHome)
+	writeScript(t, filepath.Join(home, "bin", "claude"), "#!/usr/bin/env bash\nexit 0\n")
+	writeScript(t, filepath.Join(home, "bin", "codex"), "#!/usr/bin/env bash\nexit 0\n")
+
+	calls := fakeFzf(t, home, key("chat"), key("claude-1"), key("resume"), typed("zzzzzzzz"), cancel(), cancel(), cancel(), cancel())
+
+	stdout, stderr, err := runMenu(t, registryPath, home, "")
+	if err != nil {
+		t.Fatalf("expected a mistyped id not to end the run: %v\nstderr: %s", err, stderr)
+	}
+	if !strings.Contains(stdout, "提醒: no conversation matches id: zzzzzzzz") {
+		t.Fatalf("expected the unmatched id to be reported, got: %s", stdout)
+	}
+	if argv := callFile(t, calls, "argv-4"); !strings.Contains(argv, "--prompt=搜尋或輸入對話 ID: ") {
+		t.Fatalf("expected the session picker to reopen, got argv: %s", argv)
+	}
+}
